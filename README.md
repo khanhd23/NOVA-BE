@@ -1,6 +1,6 @@
 # NOVA Backend
 
-Spring Boot modular monolith for the Android app in this repo.
+Spring Boot backend service for the NOVA app.
 
 ## Goals
 
@@ -16,19 +16,19 @@ Spring Boot modular monolith for the Android app in this repo.
 From the repo root:
 
 ```bash
-.\gradlew.bat -p backend bootRun
+./gradlew bootRun
 ```
 
 Build a jar for VPS deployment:
 
 ```bash
-.\gradlew.bat -p backend bootJar
+./gradlew bootJar
 ```
 
 Run tests:
 
 ```bash
-.\gradlew.bat -p backend test
+./gradlew test
 ```
 
 ## Module map
@@ -55,10 +55,10 @@ Run tests:
 Run the packaged jar on a VPS:
 
 ```bash
-java -jar backend/build/libs/nova-backend-0.1.0-SNAPSHOT.jar
+java -jar build/libs/nova-backend-0.1.0-SNAPSHOT.jar
 ```
 
-For a real VPS, prefer copying `backend/.env.example` to `backend/.env` and loading it from systemd. The deploy files live in `backend/deploy/`.
+For a real VPS, prefer copying `.env.example` to `.env` and loading it from systemd. The deploy files live in `deploy/`.
 
 Recommended environment variables:
 
@@ -93,9 +93,9 @@ If you put the backend behind Nginx or another reverse proxy, keep HTTPS in fron
 
 For a copy-paste VPS baseline, use:
 
-- `backend/deploy/systemd/nova-backend.service`
-- `backend/deploy/nginx/nova-backend.conf`
-- `backend/.env.example`
+- `deploy/systemd/nova-backend.service`
+- `deploy/nginx/nova-backend.conf`
+- `.env.example`
 
 ## Android client config
 
