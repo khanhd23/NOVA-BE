@@ -41,5 +41,6 @@ sudo systemctl reload nginx
 
 - Keep `client_max_body_size` at least as large as `NOVA_UPLOAD_MAX_REQUEST_SIZE`.
 - If you switch from the bundled H2 file to PostgreSQL, only the `DATABASE_URL`, `DATABASE_USERNAME`, and `DATABASE_PASSWORD` values need to change.
+- The backend listens on `8080` by default, so Nginx should proxy to `127.0.0.1:8080`.
 - The backend exposes health at `GET /api/v1/health`.
 - WebSocket traffic goes through `/ws/realtime`, so the proxy must forward `Upgrade` headers.

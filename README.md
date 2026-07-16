@@ -63,7 +63,7 @@ For a real VPS, prefer copying `.env.example` to `.env` and loading it from syst
 Recommended environment variables:
 
 ```bash
-export SERVER_PORT=8081
+export SERVER_PORT=8080
 export DATABASE_URL=jdbc:h2:file:./data/nova-db;MODE=PostgreSQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1
 export DATABASE_USERNAME=sa
 export DATABASE_PASSWORD=
@@ -91,6 +91,8 @@ For call stability on real mobile networks, set `NOVA_WEBRTC_TURN_SERVERS` toget
 
 If you put the backend behind Nginx or another reverse proxy, keep HTTPS in front of the app and leave `server.forward-headers-strategy=framework` enabled so forwarded headers are handled correctly.
 
+The default HTTP port is now `8080`, so direct API calls should target `http://<VPS_IP>:8080` unless you override `SERVER_PORT`.
+
 For a copy-paste VPS baseline, use:
 
 - `deploy/systemd/nova-backend.service`
@@ -105,7 +107,7 @@ When you build the Android app against a VPS or public API, pass the backend URL
 ./gradlew -PbackendBaseUrl=https://api.your-domain.com assembleDebug
 ```
 
-If you do not pass it, the app falls back to `http://10.0.2.2:8081` for emulator testing.
+If you do not pass it, the app currently falls back to `http://136.114.78.203:8080`. Override it with `-PbackendBaseUrl=...` or `NOVA_BACKEND_BASE_URL` when you move to a domain or a different VPS.
 
 ## Social login behavior
 
