@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: nova-backend
+  datasource:
+    url: ${DATABASE_URL:jdbc:h2:file:./data/nova-db;MODE=PostgreSQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1}
+    username: ${DATABASE_USERNAME:sa}
+    password: ${DATABASE_PASSWORD:}
+  sql:
+    init:
+      mode: always
+  servlet:
+    multipart:
+      max-file-size: ${NOVA_UPLOAD_MAX_FILE_SIZE:50MB}
+      max-request-size: ${NOVA_UPLOAD_MAX_REQUEST_SIZE:60MB}
+
+server:
+  port: ${SERVER_PORT:8081}
+  address: 0.0.0.0
+  forward-headers-strategy: framework
+
+auth:
+  google-client-id: ${NOVA_GOOGLE_WEB_CLIENT_ID:655774214440-31qsc49ov49bemf24c1uoqunenebto31.apps.googleusercontent.com}
+  allow-dev-tokens: ${NOVA_ALLOW_DEV_TOKENS:false}
+
+firebase:
+  enabled: ${NOVA_FIREBASE_ENABLED:false}
+  service-account-path: ${NOVA_FIREBASE_SERVICE_ACCOUNT_PATH:}
+  project-id: ${NOVA_FIREBASE_PROJECT_ID:}
+
+webrtc:
+  ice-servers: ${NOVA_WEBRTC_ICE_SERVERS:stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302}
+  turn-servers: ${NOVA_WEBRTC_TURN_SERVERS:}
+  turn-username: ${NOVA_WEBRTC_TURN_USERNAME:}
+  turn-credential: ${NOVA_WEBRTC_TURN_CREDENTIAL:}
+  max-restart-attempts: ${NOVA_WEBRTC_MAX_RESTART_ATTEMPTS:2}
+  restart-backoff-ms: ${NOVA_WEBRTC_RESTART_BACKOFF_MS:1000}
+
+storage:
+  upload-dir: ${NOVA_UPLOAD_DIR:./uploads}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
