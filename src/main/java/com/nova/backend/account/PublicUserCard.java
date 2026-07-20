@@ -2,6 +2,7 @@ package com.nova.backend.account;
 
 public record PublicUserCard(
         String userId,
+        String publicId,
         String displayName,
         String username,
         String bio,

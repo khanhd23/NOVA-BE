@@ -4,6 +4,7 @@ import java.util.List;
 
 public record MeResponse(
         String userId,
+        String publicId,
         String displayName,
         String username,
         String bio,

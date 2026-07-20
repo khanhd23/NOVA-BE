@@ -9,6 +9,7 @@ enum CommunityPostType {
     TEXT,
     IMAGE,
     VIDEO,
+    MIXED,
     VOICE,
     LINK,
     POLL

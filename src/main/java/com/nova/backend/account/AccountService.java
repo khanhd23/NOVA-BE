@@ -31,6 +31,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class AccountService {
@@ -45,11 +46,16 @@ public class AccountService {
     private final Map<String, AccountRecord> accounts = new ConcurrentHashMap<>();
     private final Map<String, String> providerLinks = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> linkedProviderKeysByUserId = new ConcurrentHashMap<>();
+    private final Map<String, String> publicIdByUserId = new ConcurrentHashMap<>();
+    private final Map<String, String> userIdByPublicId = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> followingByUserId = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> followersByUserId = new ConcurrentHashMap<>();
     private final SocialService socialService;
     private final List<PremiumPlanResponse> premiumPlans;
     private final AtomicInteger userSequence = new AtomicInteger(100);
+    private static final long PUBLIC_ID_MIN = 100_000_000L;
+    private static final long PUBLIC_ID_MAX = 999_999_999L;
+    private final AtomicLong publicIdSequence = new AtomicLong(PUBLIC_ID_MIN);
 
     public AccountService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper, @Lazy SocialService socialService) {
         this.jdbcTemplate = jdbcTemplate;
@@ -125,7 +131,9 @@ public class AccountService {
         loadFollowRelations();
         seedUsers();
         seedFollowRelations();
+        ensurePublicIds();
         refreshUserSequence();
+        refreshPublicIdSequence();
     }
 
     public synchronized String upsertSocialUser(SocialIdentity identity) {
@@ -133,17 +141,19 @@ public class AccountService {
         String userId = providerLinks.get(providerKey);
         if (userId == null) {
             userId = "u-" + userSequence.getAndIncrement();
-            AccountRecord record = AccountRecord.newFromIdentity(userId, identity);
+            AccountRecord record = AccountRecord.newFromIdentity(userId, generatePublicId(), identity);
             accounts.put(userId, record);
             linkProvider(userId, providerKey);
+            registerPublicId(record);
             persistAccount(record);
             return userId;
         }
 
         AccountRecord existing = requireAccount(userId);
-        AccountRecord updated = existing.withIdentity(identity);
+        AccountRecord updated = ensurePublicId(existing.withIdentity(identity));
         accounts.put(userId, updated);
         linkProvider(userId, providerKey);
+        registerPublicId(updated);
         persistAccount(updated);
         return userId;
     }
@@ -180,16 +190,17 @@ public class AccountService {
     }
 
     public PublicUserCard getPublicProfile(String userId) {
-        return toPublicCard(requireAccount(userId), null);
+        return toPublicCard(resolveAccountByKey(userId), null);
     }
 
     public PublicUserCard getPublicProfile(String viewerUserId, String userId) {
-        return toPublicCard(requireAccount(userId), viewerUserId);
+        return toPublicCard(resolveAccountByKey(userId), viewerUserId);
     }
 
     public PageResponse<PublicUserCard> profileRelations(String viewerUserId, String userId, String type, int page, int size) {
+        AccountRecord target = resolveAccountByKey(userId);
         String normalized = type == null ? "" : type.trim().toLowerCase(Locale.ROOT);
-        List<PublicUserCard> items = relationUserIds(viewerUserId, userId, normalized).stream()
+        List<PublicUserCard> items = relationUserIds(viewerUserId, target.userId(), normalized).stream()
                 .map(accounts::get)
                 .filter(Objects::nonNull)
                 .map(account -> toPublicCard(account, viewerUserId))
@@ -212,25 +223,26 @@ public class AccountService {
             throw new NotFoundException("User not found");
         }
         requireAccount(viewerUserId);
-        AccountRecord target = requireAccount(targetUserId);
-        if (viewerUserId.equals(targetUserId)) {
+        AccountRecord target = resolveAccountByKey(targetUserId);
+        String resolvedTargetUserId = target.userId();
+        if (viewerUserId.equals(resolvedTargetUserId)) {
             return toPublicCard(target, viewerUserId);
         }
 
-        boolean wasFriend = isFriend(viewerUserId, targetUserId);
-        boolean wasFollowedByThem = isFollowing(targetUserId, viewerUserId);
-        boolean changed = followed ? addFollowRelation(viewerUserId, targetUserId) : removeFollowRelation(viewerUserId, targetUserId);
+        boolean wasFriend = isFriend(viewerUserId, resolvedTargetUserId);
+        boolean wasFollowedByThem = isFollowing(resolvedTargetUserId, viewerUserId);
+        boolean changed = followed ? addFollowRelation(viewerUserId, resolvedTargetUserId) : removeFollowRelation(viewerUserId, resolvedTargetUserId);
         if (!changed) {
             return toPublicCard(target, viewerUserId);
         }
 
-        boolean isFriendNow = isFriend(viewerUserId, targetUserId);
+        boolean isFriendNow = isFriend(viewerUserId, resolvedTargetUserId);
         if (followed) {
             if (isFriendNow && !wasFriend) {
-                socialService.publishRelationNotification(targetUserId, viewerUserId, "FRIEND", "New friend", requireAccount(viewerUserId).displayName() + " is now your friend", "profile/" + viewerUserId);
-                socialService.publishRelationNotification(viewerUserId, targetUserId, "FRIEND", "New friend", target.displayName() + " is now your friend", "profile/" + targetUserId);
+                socialService.publishRelationNotification(resolvedTargetUserId, viewerUserId, "FRIEND", "New friend", requireAccount(viewerUserId).displayName() + " is now your friend", "profile/" + viewerUserId);
+                socialService.publishRelationNotification(viewerUserId, resolvedTargetUserId, "FRIEND", "New friend", target.displayName() + " is now your friend", "profile/" + resolvedTargetUserId);
             } else if (!wasFollowedByThem) {
-                socialService.publishRelationNotification(targetUserId, viewerUserId, "FOLLOW", "New follower", requireAccount(viewerUserId).displayName() + " followed you", "profile/" + viewerUserId);
+                socialService.publishRelationNotification(resolvedTargetUserId, viewerUserId, "FOLLOW", "New follower", requireAccount(viewerUserId).displayName() + " followed you", "profile/" + viewerUserId);
             }
         }
         return toPublicCard(target, viewerUserId);
@@ -244,6 +256,8 @@ public class AccountService {
                 .map(this::toPublicCard)
                 .filter(card -> normalized.isBlank()
                         || card.displayName().toLowerCase(Locale.ROOT).contains(normalized)
+                        || (card.publicId() != null && card.publicId().toLowerCase(Locale.ROOT).contains(normalized))
+                        || card.username().toLowerCase(Locale.ROOT).contains(normalized)
                         || card.userId().toLowerCase(Locale.ROOT).contains(normalized)
                         || card.gender().toLowerCase(Locale.ROOT).contains(normalized)
                         || card.interests().stream().anyMatch(value -> value.toLowerCase(Locale.ROOT).contains(normalized))
@@ -342,6 +356,7 @@ public class AccountService {
     private void seedUsers() {
         upsertSeed(AccountRecord.seed(
                 "u-current",
+                "100000001",
                 "Nova User",
                 "you",
                 26,
@@ -358,6 +373,7 @@ public class AccountService {
         ));
         upsertSeed(AccountRecord.seed(
                 "u-seraphina",
+                "100000002",
                 "Seraphina Vale",
                 "seraphina",
                 27,
@@ -374,6 +390,7 @@ public class AccountService {
         ));
         upsertSeed(AccountRecord.seed(
                 "u-elena",
+                "100000003",
                 "Elena Markov",
                 "elena",
                 25,
@@ -390,6 +407,7 @@ public class AccountService {
         ));
         upsertSeed(AccountRecord.seed(
                 "u-marcus",
+                "100000004",
                 "Marcus Reed",
                 "marcus",
                 29,
@@ -406,6 +424,7 @@ public class AccountService {
         ));
         upsertSeed(AccountRecord.seed(
                 "u-chloe",
+                "100000005",
                 "Chloe Rivera",
                 "chloe",
                 24,
@@ -422,6 +441,7 @@ public class AccountService {
         ));
         upsertSeed(AccountRecord.seed(
                 "u-alex",
+                "100000006",
                 "Alex Johnson",
                 "alex",
                 28,
@@ -438,6 +458,7 @@ public class AccountService {
         ));
         upsertSeed(AccountRecord.seed(
                 "u-mina",
+                "100000007",
                 "Mina Park",
                 "mina",
                 26,
@@ -491,6 +512,7 @@ public class AccountService {
             for (PersistedAccount persistedAccount : persisted) {
                 AccountRecord record = persistedAccount.record();
                 accounts.put(record.userId(), record);
+                registerPublicId(record);
                 Set<String> linkedKeys = new LinkedHashSet<>(persistedAccount.linkedProviderKeys());
                 if (linkedKeys.isEmpty()) {
                     linkedKeys.add(record.providerKey());
@@ -541,6 +563,18 @@ public class AccountService {
         userSequence.set(Math.max(100, maxSequence + 1));
     }
 
+    private void refreshPublicIdSequence() {
+        long maxSequence = accounts.values().stream()
+                .map(AccountRecord::publicId)
+                .map(this::extractNumericPublicId)
+                .filter(Objects::nonNull)
+                .mapToLong(Long::longValue)
+                .max()
+                .orElse(PUBLIC_ID_MIN - 1);
+        long next = maxSequence >= PUBLIC_ID_MAX ? PUBLIC_ID_MIN : Math.max(PUBLIC_ID_MIN, maxSequence + 1);
+        publicIdSequence.set(next);
+    }
+
     private Integer extractNumericUserId(String userId) {
         if (userId == null || !userId.startsWith("u-")) {
             return null;
@@ -552,9 +586,103 @@ public class AccountService {
         }
     }
 
+    private Long extractNumericPublicId(String publicId) {
+        if (!isValidPublicId(publicId)) {
+            return null;
+        }
+        try {
+            return Long.parseLong(publicId);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private String generatePublicId() {
+        long attempts = PUBLIC_ID_MAX - PUBLIC_ID_MIN + 1;
+        for (long index = 0; index < attempts; index++) {
+            long candidateValue = publicIdSequence.getAndUpdate(value ->
+                    value >= PUBLIC_ID_MAX ? PUBLIC_ID_MIN : value + 1
+            );
+            if (candidateValue < PUBLIC_ID_MIN || candidateValue > PUBLIC_ID_MAX) {
+                candidateValue = PUBLIC_ID_MIN;
+            }
+            String candidate = Long.toString(candidateValue);
+            if (!userIdByPublicId.containsKey(candidate)) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("No public IDs available");
+    }
+
+    private void registerPublicId(AccountRecord record) {
+        String publicId = record.publicId();
+        if (!isValidPublicId(publicId)) {
+            return;
+        }
+        publicIdByUserId.put(record.userId(), publicId);
+        userIdByPublicId.put(publicId, record.userId());
+    }
+
+    private AccountRecord ensurePublicId(AccountRecord record) {
+        String currentPublicId = record.publicId();
+        if (isValidPublicId(currentPublicId)) {
+            String existingUserId = userIdByPublicId.get(currentPublicId);
+            if (existingUserId == null || existingUserId.equals(record.userId())) {
+                registerPublicId(record);
+                return record;
+            }
+        }
+        String uniquePublicId = generatePublicId();
+        AccountRecord updated = record.withPublicId(uniquePublicId);
+        registerPublicId(updated);
+        return updated;
+    }
+
+    private void ensurePublicIds() {
+        for (AccountRecord record : new ArrayList<>(accounts.values())) {
+            AccountRecord ensured = ensurePublicId(record);
+            if (!Objects.equals(ensured.publicId(), record.publicId())) {
+                accounts.put(ensured.userId(), ensured);
+                persistAccount(ensured);
+            }
+        }
+    }
+
+    private AccountRecord resolveAccountByKey(String key) {
+        if (key == null || key.isBlank()) {
+            throw new NotFoundException("User not found");
+        }
+        AccountRecord direct = accounts.get(key);
+        if (direct != null) {
+            return direct;
+        }
+        String userId = userIdByPublicId.get(key.trim());
+        if (userId != null) {
+            return requireAccount(userId);
+        }
+        throw new NotFoundException("User not found");
+    }
+
+    private boolean isValidPublicId(String publicId) {
+        if (publicId == null) {
+            return false;
+        }
+        String normalized = publicId.trim();
+        if (normalized.length() != 9 || !normalized.chars().allMatch(Character::isDigit)) {
+            return false;
+        }
+        try {
+            long value = Long.parseLong(normalized);
+            return value >= PUBLIC_ID_MIN && value <= PUBLIC_ID_MAX;
+        } catch (NumberFormatException ex) {
+            return false;
+        }
+    }
+
     private void persistAccount(AccountRecord account) {
         String updateSql = """
                 UPDATE accounts SET
+                    public_id = ?,
                     provider_key = ?,
                     display_name = ?,
                     username = ?,
@@ -586,6 +714,7 @@ public class AccountService {
                 """;
         int updated = jdbcTemplate.update(
                 updateSql,
+                account.publicId(),
                 account.providerKey(),
                 account.displayName(),
                 account.username(),
@@ -618,15 +747,16 @@ public class AccountService {
             jdbcTemplate.update(
                     """
                             INSERT INTO accounts (
-                                user_id, provider_key, display_name, username, bio, avatar_url,
+                                user_id, public_id, provider_key, display_name, username, bio, avatar_url,
                                 featured_photos_json, interests_json, linked_provider_keys_json, age, city, gender, verified, online, premium,
                                 vip_tier_id, vip_tier_name, vip_expires_at, diamond_balance,
                                 onboarding_complete, profile_complete, distance_km,
                                 settings_json, stats_json, badges_json, wallet_json, entitlements_json,
                                 created_at, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                             """,
                     account.userId(),
+                    account.publicId(),
                     account.providerKey(),
                     account.displayName(),
                     account.username(),
@@ -751,6 +881,7 @@ public class AccountService {
         Timestamp vipExpiresAt = rs.getTimestamp("vip_expires_at");
         return new AccountRecord(
                 rs.getString("user_id"),
+                rs.getString("public_id"),
                 rs.getString("display_name"),
                 rs.getString("username"),
                 rs.getString("bio"),
@@ -842,6 +973,7 @@ public class AccountService {
         boolean activePremium = account.premium() && (account.vipExpiresAt() == null || account.vipExpiresAt().isAfter(Instant.now()));
         return new MeResponse(
                 account.userId(),
+                account.publicId(),
                 account.displayName(),
                 account.username(),
                 account.bio(),
@@ -877,6 +1009,7 @@ public class AccountService {
         boolean activePremium = account.premium() && (account.vipExpiresAt() == null || account.vipExpiresAt().isAfter(Instant.now()));
         return new PublicUserCard(
                 account.userId(),
+                account.publicId(),
                 account.displayName(),
                 account.username(),
                 account.bio(),
@@ -948,6 +1081,7 @@ public class AccountService {
 
     private record AccountRecord(
             String userId,
+            String publicId,
             String displayName,
             String username,
             String bio,
@@ -974,13 +1108,14 @@ public class AccountService {
             List<WalletEntryResponse> wallet,
             List<EntitlementResponse> entitlements
     ) {
-        static AccountRecord newFromIdentity(String userId, SocialIdentity identity) {
+        static AccountRecord newFromIdentity(String userId, String publicId, SocialIdentity identity) {
             String username = slug(identity.displayName());
             String avatarUrl = identity.avatarUrl().isBlank()
                     ? defaultAvatarUrl(identity.displayName())
                     : identity.avatarUrl();
             return new AccountRecord(
                     userId,
+                    publicId,
                     identity.displayName(),
                     username,
                     "",
@@ -1031,6 +1166,7 @@ public class AccountService {
 
         static AccountRecord seed(
                 String userId,
+                String publicId,
                 String displayName,
                 String username,
                 int age,
@@ -1047,6 +1183,7 @@ public class AccountService {
         ) {
             return seed(
                     userId,
+                    publicId,
                     displayName,
                     username,
                     age,
@@ -1071,6 +1208,7 @@ public class AccountService {
 
         static AccountRecord seed(
                 String userId,
+                String publicId,
                 String displayName,
                 String username,
                 int age,
@@ -1095,6 +1233,7 @@ public class AccountService {
             boolean activePremium = premium && (vipExpiresAt == null || vipExpiresAt.isAfter(Instant.now()));
             return new AccountRecord(
                     userId,
+                    publicId,
                     displayName,
                     username,
                     bio,
@@ -1148,6 +1287,7 @@ public class AccountService {
             String resolvedAvatar = newAvatar.isBlank() ? defaultAvatarUrl(identity.displayName()) : newAvatar;
             return new AccountRecord(
                     userId,
+                    publicId,
                     identity.displayName(),
                     username,
                     bio,
@@ -1193,6 +1333,7 @@ public class AccountService {
             boolean newOnboardingComplete = onboardingComplete || newProfileComplete;
             return new AccountRecord(
                     userId,
+                    publicId,
                     newDisplayName,
                     slug(newDisplayName),
                     newBio,
@@ -1238,6 +1379,7 @@ public class AccountService {
             );
             return new AccountRecord(
                     userId,
+                    publicId,
                     displayName,
                     username,
                     bio,
@@ -1284,6 +1426,7 @@ public class AccountService {
             );
             return new AccountRecord(
                     userId,
+                    publicId,
                     displayName,
                     username,
                     bio,
@@ -1316,6 +1459,7 @@ public class AccountService {
             List<WalletEntryResponse> updatedWallet = prependWalletEntry(ledgerEntry);
             return new AccountRecord(
                     userId,
+                    publicId,
                     displayName,
                     username,
                     bio,
@@ -1340,6 +1484,38 @@ public class AccountService {
                     stats,
                     badges,
                     updatedWallet,
+                    entitlements
+            );
+        }
+
+        AccountRecord withPublicId(String newPublicId) {
+            return new AccountRecord(
+                    userId,
+                    newPublicId,
+                    displayName,
+                    username,
+                    bio,
+                    avatarUrl,
+                    featuredPhotos,
+                    interests,
+                    age,
+                    city,
+                    gender,
+                    verified,
+                    online,
+                    premium,
+                    vipTierId,
+                    vipTierName,
+                    vipExpiresAt,
+                    diamondBalance,
+                    onboardingComplete,
+                    profileComplete,
+                    providerKey,
+                    distanceKm,
+                    settings,
+                    stats,
+                    badges,
+                    wallet,
                     entitlements
             );
         }

@@ -31,9 +31,11 @@ public class SocialController {
     @GetMapping("/threads/{threadId}")
     public ApiResponse<ThreadDetailResponse> thread(
             @AuthenticationPrincipal AuthPrincipal principal,
-            @PathVariable String threadId
+            @PathVariable String threadId,
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(required = false) String before
     ) {
-        return ApiResponse.ok(socialService.thread(principal.userId(), threadId));
+        return ApiResponse.ok(socialService.thread(principal.userId(), threadId, limit, before));
     }
 
     @PostMapping("/threads/{threadId}/messages")

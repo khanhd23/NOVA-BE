@@ -62,6 +62,10 @@ public class SocialService {
     }
 
     public ThreadDetailResponse thread(String userId, String threadId) {
+        return thread(userId, threadId, 20, null);
+    }
+
+    public ThreadDetailResponse thread(String userId, String threadId, int limit, String before) {
         ThreadRecord thread = requireThread(threadId);
         if (!thread.participantIds().contains(userId)) {
             throw new NotFoundException("Thread not found");
@@ -69,12 +73,28 @@ public class SocialService {
         if (thread.hiddenForUserIds().contains(userId)) {
             throw new NotFoundException("Thread not found");
         }
+        int safeLimit = Math.max(1, Math.min(limit, 20));
+        List<MessageRecord> visibleMessages = thread.messages().stream()
+                .filter(message -> isMessageVisibleToUser(message, userId))
+                .toList();
+        int endExclusive = visibleMessages.size();
+        if (before != null && !before.isBlank()) {
+            int beforeIndex = indexOfMessage(visibleMessages, before);
+            if (beforeIndex >= 0) {
+                endExclusive = beforeIndex;
+            }
+        }
+        int startInclusive = Math.max(0, endExclusive - safeLimit);
+        List<ChatMessageResponse> messages = visibleMessages.subList(startInclusive, endExclusive).stream()
+                .map(message -> toMessageResponse(message, userId))
+                .toList();
+        boolean hasMore = startInclusive > 0;
+        String nextCursor = hasMore ? visibleMessages.get(startInclusive).id() : null;
         return new ThreadDetailResponse(
                 toThreadResponse(thread, userId),
-                thread.messages().stream()
-                        .filter(message -> isMessageVisibleToUser(message, userId))
-                        .map(message -> toMessageResponse(message, userId))
-                        .toList()
+                messages,
+                hasMore,
+                nextCursor
         );
     }
 
@@ -302,7 +322,7 @@ public class SocialService {
                 threadStatePayload(threadId, userId, "READ")
         );
         persistState();
-        return thread(userId, threadId);
+        return thread(userId, threadId, 20, null);
     }
 
     public ChatThreadResponse setTyping(String userId, String threadId, boolean typing) {
@@ -327,15 +347,16 @@ public class SocialService {
     }
 
     public CallSessionResponse startCall(String userId, String threadId, CreateCallRequest request) {
-        ThreadRecord thread = requireThread(threadId);
+        ThreadRecord thread = resolveThreadForCall(userId, threadId, request.peerUserId());
         if (!thread.participantIds().contains(userId)) {
             throw new NotFoundException("Thread not found");
         }
         thread.hiddenForUserIds().clear();
+        String resolvedThreadId = thread.id();
         String callId = "call-" + callSequence.getAndIncrement();
         CallRecord call = new CallRecord(
                 callId,
-                threadId,
+                resolvedThreadId,
                 userId,
                 thread.otherParticipant(userId),
                 request.callType(),
@@ -356,7 +377,7 @@ public class SocialService {
         notifyUsers(
                 List.of(call.partnerId()),
                 NotificationKind.CALL,
-                threadId,
+                resolvedThreadId,
                 request.callType() == CallType.VIDEO ? "Video call" : "Voice call",
                 "Calling " + accountService.getPublicProfile(call.partnerId()).displayName(),
                 "call/" + callId
@@ -366,7 +387,7 @@ public class SocialService {
                 RealtimeEventType.CALL_STARTED,
                 userId,
                 call.partnerId(),
-                threadId,
+                resolvedThreadId,
                 callId,
                 null,
                 request.callType() == CallType.VIDEO ? "Incoming video call" : "Incoming voice call",
@@ -378,7 +399,7 @@ public class SocialService {
                 RealtimeEventType.CALL_STARTED,
                 userId,
                 userId,
-                threadId,
+                resolvedThreadId,
                 callId,
                 null,
                 request.callType() == CallType.VIDEO ? "Video call started" : "Voice call started",
@@ -1034,6 +1055,46 @@ public class SocialService {
         );
     }
 
+    private ThreadRecord resolveThreadForCall(String userId, String threadId, String peerUserId) {
+        ThreadRecord existing = threads.get(threadId);
+        if (existing != null) {
+            ensureParticipant(existing, userId);
+            return existing;
+        }
+
+        String peer = peerUserId == null ? "" : peerUserId.trim();
+        if (peer.isBlank() || Objects.equals(peer, userId)) {
+            throw new NotFoundException("Thread not found");
+        }
+
+        PublicUserCard peerProfile = accountService.getPublicProfile(peer);
+        return threads.values().stream()
+                .filter(thread -> thread.type() == ThreadType.DIRECT)
+                .filter(thread -> thread.participantIds().contains(userId))
+                .filter(thread -> thread.participantIds().contains(peer))
+                .findFirst()
+                .orElseGet(() -> createDirectThread(userId, peer, peerProfile));
+    }
+
+    private ThreadRecord createDirectThread(String userId, String peerUserId, PublicUserCard peerProfile) {
+        ThreadRecord thread = new ThreadRecord(
+                "thread-" + UUID.randomUUID(),
+                ThreadType.DIRECT,
+                List.of(userId, peerUserId),
+                new CopyOnWriteArrayList<>(),
+                "",
+                0,
+                peerProfile.online(),
+                false,
+                false,
+                "Direct",
+                timeLabel(Instant.now()),
+                null
+        );
+        threads.put(thread.id(), thread);
+        return thread;
+    }
+
     private ThreadRecord requireThread(String threadId) {
         ThreadRecord thread = threads.get(threadId);
         if (thread == null) {
@@ -1066,6 +1127,15 @@ public class SocialService {
     private int indexOfMessage(ThreadRecord thread, String messageId) {
         for (int i = 0; i < thread.messages().size(); i++) {
             if (Objects.equals(thread.messages().get(i).id(), messageId)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private int indexOfMessage(List<MessageRecord> messages, String messageId) {
+        for (int i = 0; i < messages.size(); i++) {
+            if (Objects.equals(messages.get(i).id(), messageId)) {
                 return i;
             }
         }
@@ -1203,7 +1273,7 @@ public class SocialService {
                 participant,
                 previewText(thread, currentUserId),
                 thread.unreadCount(),
-                thread.online(),
+                participant.online(),
                 thread.typing(),
                 thread.pinned(),
                 thread.matchLabel(),

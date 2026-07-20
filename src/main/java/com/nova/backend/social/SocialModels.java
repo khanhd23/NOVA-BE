@@ -101,7 +101,9 @@ record ChatMessageResponse(
 
 record ThreadDetailResponse(
         ChatThreadResponse thread,
-        List<ChatMessageResponse> messages
+        List<ChatMessageResponse> messages,
+        boolean hasMore,
+        String nextCursor
 ) {
 }
 
@@ -138,7 +140,8 @@ record TypingStateRequest(
 
 record CreateCallRequest(
         @NotNull CallType callType,
-        @NotNull CallDirection direction
+        @NotNull CallDirection direction,
+        String peerUserId
 ) {
 }
 

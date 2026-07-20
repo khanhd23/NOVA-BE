@@ -58,6 +58,15 @@ public class CommunityController {
         return ApiResponse.ok(communityService.communityPosts(principal.userId(), tab, cursor, refresh, size));
     }
 
+    @GetMapping("/users/{userId}/posts")
+    public ApiResponse<?> profilePosts(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String userId,
+            @RequestParam(defaultValue = "30") int size
+    ) {
+        return ApiResponse.ok(communityService.profilePosts(principal.userId(), userId, size));
+    }
+
     @PostMapping("/community-posts")
     public ApiResponse<CommunityPostResponse> createPost(
             @AuthenticationPrincipal AuthPrincipal principal,

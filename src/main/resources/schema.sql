@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS accounts (
     user_id VARCHAR(64) PRIMARY KEY,
+    public_id VARCHAR(16) UNIQUE,
     provider_key VARCHAR(160) NOT NULL UNIQUE,
     display_name VARCHAR(120) NOT NULL,
     username VARCHAR(120) NOT NULL,
@@ -30,10 +31,12 @@ CREATE TABLE IF NOT EXISTS accounts (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS public_id VARCHAR(16);
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS gender VARCHAR(32) NOT NULL DEFAULT 'Not specified';
 
 CREATE INDEX IF NOT EXISTS idx_accounts_provider_key ON accounts(provider_key);
 CREATE INDEX IF NOT EXISTS idx_accounts_username ON accounts(username);
+CREATE INDEX IF NOT EXISTS idx_accounts_public_id ON accounts(public_id);
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
     session_id VARCHAR(64) PRIMARY KEY,

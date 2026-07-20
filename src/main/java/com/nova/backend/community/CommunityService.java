@@ -79,7 +79,7 @@ public class CommunityService {
                 page.stream().map(post -> toPostResponse(post, userId)).toList(),
                 events.values().stream().map(event -> toEvent(event, userId)).toList(),
                 trendingTags(8),
-                List.of("TEXT", "IMAGE", "VIDEO", "VOICE", "LINK", "POLL"),
+                List.of("TEXT", "IMAGE", "VIDEO", "MIXED", "VOICE", "LINK", "POLL"),
                 "refresh-" + refreshSequence.getAndIncrement(),
                 nextCursor,
                 hasMore
@@ -109,6 +109,17 @@ public class CommunityService {
 
     public List<CommunityPostResponse> communityPosts(String userId, String tab, String cursor, boolean refresh, int size) {
         return feed(userId, tab, cursor, refresh, size).posts();
+    }
+
+    public List<CommunityPostResponse> profilePosts(String viewerUserId, String targetUserId, int size) {
+        String resolvedUserId = accountService.getPublicProfile(viewerUserId, targetUserId).userId();
+        int pageSize = Math.max(1, Math.min(size, 100));
+        return posts.values().stream()
+                .filter(post -> Objects.equals(post.authorUserId(), resolvedUserId))
+                .sorted(Comparator.comparing(CommunityPostState::createdAt).reversed())
+                .limit(pageSize)
+                .map(post -> toPostResponse(post, viewerUserId))
+                .toList();
     }
 
     public CommunityPostResponse createPost(String userId, CreateCommunityPostRequest request) {
@@ -263,8 +274,8 @@ public class CommunityService {
                 "u-elena",
                 "TEXT",
                 "We should keep call summary cards minimal and centered.",
-                "https://cdn.nova/community/post-1.jpg",
-                List.of("https://cdn.nova/community/post-1.jpg"),
+                null,
+                List.of(),
                 null,
                 List.of("product", "compose", "ux"),
                 List.of(),
@@ -300,8 +311,8 @@ public class CommunityService {
                 "u-mina",
                 "VIDEO",
                 "Bali routes for a 3-day trip?",
-                "https://cdn.nova/community/post-3.mp4",
-                List.of("https://cdn.nova/community/post-3.mp4"),
+                "https://www.w3schools.com/html/mov_bbb.mp4",
+                List.of("https://www.w3schools.com/html/mov_bbb.mp4"),
                 "https://cdn.nova/community/post-3-thumb.jpg",
                 List.of("travel", "weekend", "bali"),
                 List.of("u-seraphina"),
@@ -310,6 +321,27 @@ public class CommunityService {
                 List.of(),
                 1,
                 Instant.now().minusSeconds(7200)
+        ));
+        seedPost(new CommunityPostState(
+                "cpost-4",
+                "topic-photo",
+                "u-elena",
+                "MIXED",
+                "One reel, two stills, same trip.",
+                "https://cdn.nova/community/post-4.jpg",
+                List.of(
+                        "https://cdn.nova/community/post-4.jpg",
+                        "https://www.w3schools.com/html/mov_bbb.mp4",
+                        "https://cdn.nova/community/post-4b.jpg"
+                ),
+                "https://cdn.nova/community/post-4-thumb.jpg",
+                List.of("mixed", "travel", "story"),
+                List.of(),
+                List.of("u-current"),
+                List.of(),
+                List.of(),
+                6,
+                Instant.now().minusSeconds(5400)
         ));
 
         events.put("event-design-night", new EventState("event-design-night", "Design Night", "Live", "Fri 8 PM", "Berlin", "$12", "https://cdn.nova/events/design-night.jpg", "248 going", false));
