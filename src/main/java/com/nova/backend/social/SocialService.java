@@ -392,7 +392,7 @@ public class SocialService {
                 null,
                 request.callType() == CallType.VIDEO ? "Incoming video call" : "Incoming voice call",
                 accountService.getPublicProfile(userId).displayName() + " is calling you",
-                callEventPayload(call, "RINGING")
+                callEventPayloadForUser(call, call.partnerId(), "RINGING")
         );
         publishToUser(
                 userId,
@@ -404,17 +404,17 @@ public class SocialService {
                 null,
                 request.callType() == CallType.VIDEO ? "Video call started" : "Voice call started",
                 "Calling " + accountService.getPublicProfile(call.partnerId()).displayName(),
-                callEventPayload(call, "RINGING")
+                callEventPayloadForUser(call, userId, "RINGING")
         );
         persistState();
-        return callSession(call);
+        return callSession(call, userId);
     }
 
     public CallSessionResponse answerCall(String userId, String callId) {
         CallRecord call = requireCall(callId);
         ensureCallParticipant(call, userId);
         if ("ENDED".equals(call.status())) {
-            return callSession(call);
+            return callSession(call, userId);
         }
         call.answeredAt = Instant.now();
         call.status = "IN_CALL";
@@ -425,17 +425,17 @@ public class SocialService {
                 userId,
                 "Call answered",
                 accountService.getPublicProfile(userId).displayName() + " answered the call",
-                callEventPayload(call, "IN_CALL")
+                "IN_CALL"
         );
         persistState();
-        return callSession(call);
+        return callSession(call, userId);
     }
 
     public CallSessionResponse endCall(String userId, String callId, EndCallRequest request) {
         CallRecord call = requireCall(callId);
         ensureCallParticipant(call, userId);
         if ("ENDED".equals(call.status())) {
-            return callSession(call);
+            return callSession(call, userId);
         }
         Instant endedAt = Instant.now();
         call.endedAt = endedAt;
@@ -446,7 +446,7 @@ public class SocialService {
             call.durationSeconds = 0;
         }
         call.status = "ENDED";
-        CallSummaryResponse summary = summary(call);
+        CallSummaryResponse summary = summary(call, userId);
         ThreadRecord thread = requireThread(call.threadId());
         MessageRecord callLog = new MessageRecord(
                 "msg-" + messageSequence.getAndIncrement(),
@@ -495,7 +495,7 @@ public class SocialService {
                 userId,
                 "Call ended",
                 summaryText(summary),
-                callEventPayload(call, summaryText(summary))
+                summaryText(summary)
         );
         persistState();
         return new CallSessionResponse(call.id(), call.threadId(), summary, call.status, call.minimized);
@@ -515,21 +515,23 @@ public class SocialService {
                 null,
                 minimized ? "Call minimized" : "Call restored",
                 minimized ? "Call minimized" : "Call restored",
-                callEventPayload(call, minimized ? "MINIMIZED" : "IN_CALL")
+                callEventPayloadForUser(call, userId, minimized ? "MINIMIZED" : "IN_CALL")
         );
         persistState();
-        return callSession(call);
+        return callSession(call, userId);
     }
 
-    public CallSessionResponse call(String callId) {
-        return callSession(requireCall(callId));
+    public CallSessionResponse call(String userId, String callId) {
+        CallRecord call = requireCall(callId);
+        ensureCallParticipant(call, userId);
+        return callSession(call, userId);
     }
 
     public CallListResponse callHistory(String userId) {
         return new CallListResponse(
                 calls.values().stream()
                         .filter(call -> Objects.equals(call.initiatorId(), userId) || Objects.equals(call.partnerId(), userId))
-                        .map(this::summary)
+                        .map(call -> summary(call, userId))
                         .sorted(Comparator.comparing(CallSummaryResponse::startedAtLabel).reversed())
                         .toList()
         );
@@ -657,20 +659,22 @@ public class SocialService {
             String actorUserId,
             String title,
             String body,
-            Map<String, Object> payload
+            String summaryText
     ) {
-        publishEvent(
-                List.of(call.initiatorId(), call.partnerId()),
-                type,
-                actorUserId,
-                null,
-                call.threadId(),
-                call.id(),
-                null,
-                title,
-                body,
-                payload
-        );
+        for (String recipientUserId : List.of(call.initiatorId(), call.partnerId())) {
+            publishToUser(
+                    recipientUserId,
+                    type,
+                    actorUserId,
+                    recipientUserId,
+                    call.threadId(),
+                    call.id(),
+                    null,
+                    title,
+                    body,
+                    callEventPayloadForUser(call, recipientUserId, summaryText)
+            );
+        }
     }
 
     private void publishNotificationsToRecipients(ThreadRecord thread, String excludedUserId, NotificationResponse notification) {
@@ -819,21 +823,33 @@ public class SocialService {
         return payload;
     }
 
-    private Map<String, Object> callEventPayload(CallRecord call, String summaryText) {
+    private Map<String, Object> callEventPayloadForUser(CallRecord call, String recipientUserId, String summaryText) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        PublicUserCard caller = accountService.getPublicProfile(call.initiatorId());
+        PublicUserCard callee = accountService.getPublicProfile(call.partnerId());
+        String peerUserId = Objects.equals(recipientUserId, call.initiatorId()) ? call.partnerId() : call.initiatorId();
+        String peerName = Objects.equals(peerUserId, call.initiatorId()) ? caller.displayName() : callee.displayName();
+        String direction = Objects.equals(recipientUserId, call.partnerId()) ? CallDirection.INCOMING.name() : CallDirection.OUTGOING.name();
+
         payload.put("callId", call.id());
         payload.put("threadId", call.threadId());
+        payload.put("callerId", call.initiatorId());
+        payload.put("callerName", caller.displayName());
+        payload.put("calleeId", call.partnerId());
+        payload.put("calleeName", callee.displayName());
+        payload.put("peerUserId", peerUserId);
+        payload.put("peerName", peerName);
         payload.put("initiatorId", call.initiatorId());
-        payload.put("partnerId", call.partnerId());
+        payload.put("partnerId", peerUserId);
         payload.put("callType", call.callType().name());
-        payload.put("direction", call.direction().name());
+        payload.put("direction", direction);
         payload.put("status", call.status());
         payload.put("durationSeconds", call.durationSeconds());
         payload.put("minimized", call.minimized());
         payload.put("startedAtLabel", timeLabel(call.startedAt()));
         payload.put("answeredAtLabel", call.answeredAt() == null ? "" : timeLabel(call.answeredAt()));
         payload.put("endedAtLabel", call.endedAt() == null ? "" : timeLabel(call.endedAt()));
-        payload.put("partnerName", accountService.getPublicProfile(call.partnerId()).displayName());
+        payload.put("partnerName", peerName);
         if (call.endReason() != null) {
             payload.put("endReason", call.endReason().name());
         }
@@ -1311,22 +1327,24 @@ public class SocialService {
                 message.attachmentDurationSeconds(),
                 null,
                 message.status() == MessageStatus.SEEN,
-                message.callSummary(),
+                message.callSummary() == null ? null : summaryForCallLog(message.callSummary(), currentUserId),
                 message.status()
         );
     }
 
-    private CallSessionResponse callSession(CallRecord call) {
-        return new CallSessionResponse(call.id(), call.threadId(), summary(call), call.status(), call.minimized());
+    private CallSessionResponse callSession(CallRecord call, String currentUserId) {
+        return new CallSessionResponse(call.id(), call.threadId(), summary(call, currentUserId), call.status(), call.minimized());
     }
 
-    private CallSummaryResponse summary(CallRecord call) {
-        PublicUserCard partner = accountService.getPublicProfile(call.partnerId());
+    private CallSummaryResponse summary(CallRecord call, String currentUserId) {
+        boolean currentUserIsCallee = Objects.equals(currentUserId, call.partnerId());
+        String peerUserId = currentUserIsCallee ? call.initiatorId() : call.partnerId();
+        PublicUserCard partner = accountService.getPublicProfile(peerUserId);
         return new CallSummaryResponse(
                 call.id(),
                 partner.displayName(),
                 call.callType(),
-                call.direction(),
+                currentUserIsCallee ? CallDirection.INCOMING : CallDirection.OUTGOING,
                 call.durationSeconds(),
                 call.endReason() == null ? CallEndReason.COMPLETED : call.endReason(),
                 timeLabel(call.startedAt()),
@@ -1334,6 +1352,14 @@ public class SocialService {
                 call.micOn(),
                 call.videoOn()
         );
+    }
+
+    private CallSummaryResponse summaryForCallLog(CallSummaryResponse summary, String currentUserId) {
+        CallRecord call = calls.get(summary.id());
+        if (call == null) {
+            return summary;
+        }
+        return summary(call, currentUserId);
     }
 
     private String summaryText(CallSummaryResponse summary) {

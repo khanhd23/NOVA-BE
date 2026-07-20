@@ -108,8 +108,11 @@ public class SocialController {
     }
 
     @GetMapping("/calls/{callId}")
-    public ApiResponse<CallSessionResponse> call(@PathVariable String callId) {
-        return ApiResponse.ok(socialService.call(callId));
+    public ApiResponse<CallSessionResponse> call(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String callId
+    ) {
+        return ApiResponse.ok(socialService.call(principal.userId(), callId));
     }
 
     @PostMapping("/calls/{callId}/answer")
