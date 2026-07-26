@@ -2,6 +2,7 @@ package com.nova.backend.community;
 
 import com.nova.backend.auth.AuthPrincipal;
 import com.nova.backend.common.ApiResponse;
+import com.nova.backend.common.PageResponse;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -58,6 +59,16 @@ public class CommunityController {
         return ApiResponse.ok(communityService.communityPosts(principal.userId(), tab, cursor, refresh, size));
     }
 
+    @GetMapping("/community-posts/search")
+    public ApiResponse<PageResponse<CommunityPostResponse>> searchPosts(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @RequestParam(required = false) String q,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        return ApiResponse.ok(communityService.searchPosts(principal.userId(), q, page, size));
+    }
+
     @GetMapping("/users/{userId}/posts")
     public ApiResponse<?> profilePosts(
             @AuthenticationPrincipal AuthPrincipal principal,
@@ -91,6 +102,16 @@ public class CommunityController {
             @Valid @RequestBody CreateCommunityCommentRequest request
     ) {
         return ApiResponse.ok(communityService.addComment(principal.userId(), postId, request));
+    }
+
+    @GetMapping("/community-posts/{postId}/comments")
+    public ApiResponse<PageResponse<CommunityCommentResponse>> comments(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String postId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return ApiResponse.ok(communityService.comments(principal.userId(), postId, page, size));
     }
 
     @PostMapping("/community-posts/{postId}/share")

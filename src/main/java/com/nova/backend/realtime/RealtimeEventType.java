@@ -3,11 +3,13 @@ package com.nova.backend.realtime;
 public enum RealtimeEventType {
     CONNECTION_READY,
     MESSAGE_CREATED,
+    MESSAGE_UPDATED,
     MESSAGE_RECALLED,
     MESSAGE_DELETED,
     THREAD_DELETED,
     THREAD_READ,
     THREAD_TYPING,
+    USER_PRESENCE,
     CALL_STARTED,
     CALL_ANSWERED,
     CALL_ENDED,

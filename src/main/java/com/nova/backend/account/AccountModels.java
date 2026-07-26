@@ -10,8 +10,9 @@ record UpdateProfileRequest(
         @Size(max = 160) String bio,
         @Size(max = 60) String city,
         Integer age,
+        String gender,
         String photoUrl,
-        @Size(max = 3) List<String> featuredPhotos,
+        @Size(max = 5) List<String> featuredPhotos,
         @Size(max = 12) List<String> interests
 ) {
 }

@@ -13,6 +13,7 @@ public record MeResponse(
         List<String> interests,
         int age,
         String city,
+        String gender,
         boolean verified,
         boolean online,
         boolean premium,

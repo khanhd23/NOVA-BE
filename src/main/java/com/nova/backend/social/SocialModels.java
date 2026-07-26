@@ -58,6 +58,7 @@ enum NotificationKind {
     CALL,
     FOLLOW,
     FRIEND,
+    POKE,
     COMMUNITY,
     EVENT,
     SYSTEM
@@ -95,7 +96,8 @@ record ChatMessageResponse(
         String translatedText,
         boolean isRead,
         CallSummaryResponse callSummary,
-        MessageStatus status
+        MessageStatus status,
+        String createdAt
 ) {
 }
 
@@ -130,6 +132,11 @@ record DeleteMessageRequest(
 
 record RecallMessageRequest(
         String reason
+) {
+}
+
+record EditMessageRequest(
+        String text
 ) {
 }
 

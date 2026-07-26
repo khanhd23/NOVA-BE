@@ -65,6 +65,18 @@ record DiscoverResponse(
 ) {
 }
 
+record PokeRequest(
+        @NotBlank String candidateId
+) {
+}
+
+record PokeResponse(
+        boolean delivered,
+        String message,
+        String nextCandidateId
+) {
+}
+
 record SwipeRequest(
         @NotBlank String candidateId,
         @NotBlank String direction,

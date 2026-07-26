@@ -2,6 +2,8 @@ package com.nova.backend.realtime;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nova.backend.account.AccountService;
+import com.nova.backend.social.SocialService;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -18,17 +20,29 @@ import java.util.UUID;
 public class RealtimeWebSocketHandler extends TextWebSocketHandler {
 
     private final RealtimeSessionRegistry sessionRegistry;
+    private final AccountService accountService;
+    private final SocialService socialService;
     private final ObjectMapper objectMapper;
 
-    public RealtimeWebSocketHandler(RealtimeSessionRegistry sessionRegistry, ObjectMapper objectMapper) {
+    public RealtimeWebSocketHandler(
+            RealtimeSessionRegistry sessionRegistry,
+            AccountService accountService,
+            SocialService socialService,
+            ObjectMapper objectMapper
+    ) {
         this.sessionRegistry = sessionRegistry;
+        this.accountService = accountService;
+        this.socialService = socialService;
         this.objectMapper = objectMapper;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         String userId = (String) session.getAttributes().get("userId");
-        sessionRegistry.register(userId, session);
+        boolean firstSession = sessionRegistry.register(userId, session);
+        if (firstSession && accountService.setOnline(userId, true)) {
+            socialService.publishPresence(userId, true);
+        }
         send(session, new RealtimeEvent(
                 UUID.randomUUID().toString(),
                 RealtimeEventType.CONNECTION_READY,
@@ -81,7 +95,10 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        sessionRegistry.unregister(session);
+        String userId = sessionRegistry.unregister(session);
+        if (userId != null && !sessionRegistry.hasActiveSession(userId) && accountService.setOnline(userId, false)) {
+            socialService.publishPresence(userId, false);
+        }
     }
 
     private void send(WebSocketSession session, RealtimeEvent event) {

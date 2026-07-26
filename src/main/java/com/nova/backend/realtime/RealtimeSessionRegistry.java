@@ -26,15 +26,16 @@ public class RealtimeSessionRegistry {
         this.objectMapper = objectMapper;
     }
 
-    public void register(String userId, WebSocketSession session) {
+    public boolean register(String userId, WebSocketSession session) {
         sessionsByUser.computeIfAbsent(userId, ignored -> ConcurrentHashMap.newKeySet()).add(session);
         userBySessionId.put(session.getId(), userId);
+        return sessionsByUser.getOrDefault(userId, Set.of()).size() == 1;
     }
 
-    public void unregister(WebSocketSession session) {
+    public String unregister(WebSocketSession session) {
         String userId = userBySessionId.remove(session.getId());
         if (userId == null) {
-            return;
+            return null;
         }
         Set<WebSocketSession> sessions = sessionsByUser.get(userId);
         if (sessions != null) {
@@ -43,6 +44,12 @@ public class RealtimeSessionRegistry {
                 sessionsByUser.remove(userId);
             }
         }
+        return userId;
+    }
+
+    public boolean hasActiveSession(String userId) {
+        Set<WebSocketSession> sessions = sessionsByUser.get(userId);
+        return sessions != null && !sessions.isEmpty();
     }
 
     public void publish(Collection<String> userIds, RealtimeEvent event) {

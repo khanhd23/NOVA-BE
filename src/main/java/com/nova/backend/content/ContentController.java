@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/v1")
 public class ContentController {
@@ -29,8 +31,14 @@ public class ContentController {
     }
 
     @GetMapping("/discover")
-    public ApiResponse<DiscoverResponse> discover(@AuthenticationPrincipal AuthPrincipal principal) {
-        return ApiResponse.ok(contentService.discover(principal.userId()));
+    public ApiResponse<DiscoverResponse> discover(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @RequestParam(required = false) String gender,
+            @RequestParam(required = false) Integer minAge,
+            @RequestParam(required = false) Integer maxAge,
+            @RequestParam(required = false) List<String> excludeIds
+    ) {
+        return ApiResponse.ok(contentService.discover(principal.userId(), gender, minAge, maxAge, excludeIds));
     }
 
     @PostMapping("/discover/swipe")
@@ -39,6 +47,14 @@ public class ContentController {
             @Valid @RequestBody SwipeRequest request
     ) {
         return ApiResponse.ok(contentService.swipe(principal.userId(), request));
+    }
+
+    @PostMapping("/discover/poke")
+    public ApiResponse<PokeResponse> poke(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @Valid @RequestBody PokeRequest request
+    ) {
+        return ApiResponse.ok(contentService.poke(principal.userId(), request));
     }
 
     @GetMapping("/media")

@@ -2,6 +2,7 @@ package com.nova.backend.social;
 
 import com.nova.backend.account.AccountService;
 import com.nova.backend.account.PublicUserCard;
+import com.nova.backend.common.PageResponse;
 import com.nova.backend.common.exception.ConflictException;
 import com.nova.backend.common.exception.BadRequestException;
 import com.nova.backend.common.exception.NotFoundException;
@@ -61,6 +62,29 @@ public class SocialService {
                 .toList();
     }
 
+    public PageResponse<ChatThreadResponse> searchThreads(String userId, String query, int page, int size) {
+        String normalized = normalize(query);
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 20));
+        List<ThreadSearchCandidate> matched = threads.values().stream()
+                .filter(thread -> thread.participantIds().contains(userId))
+                .filter(thread -> !thread.messages().isEmpty())
+                .map(thread -> {
+                    String otherId = thread.otherParticipant(userId);
+                    return new ThreadSearchCandidate(thread, accountService.getPublicProfile(otherId));
+                })
+                .filter(candidate -> normalized.isBlank() || matchesThreadSearch(candidate.participant(), normalized))
+                .sorted(Comparator.comparing((ThreadSearchCandidate candidate) -> candidate.thread().updatedAt()).reversed())
+                .toList();
+
+        int fromIndex = Math.min(safePage * safeSize, matched.size());
+        int toIndex = Math.min(fromIndex + safeSize, matched.size());
+        List<ChatThreadResponse> items = matched.subList(fromIndex, toIndex).stream()
+                .map(candidate -> toThreadResponse(candidate.thread(), userId, candidate.participant()))
+                .toList();
+        return new PageResponse<>(items, safePage, safeSize, matched.size());
+    }
+
     public ThreadDetailResponse thread(String userId, String threadId) {
         return thread(userId, threadId, 20, null);
     }
@@ -70,8 +94,12 @@ public class SocialService {
         if (!thread.participantIds().contains(userId)) {
             throw new NotFoundException("Thread not found");
         }
-        if (thread.hiddenForUserIds().contains(userId)) {
-            throw new NotFoundException("Thread not found");
+        boolean hiddenForUser = thread.hiddenForUserIds().contains(userId);
+        if (hiddenForUser) {
+            markThreadMessagesDeletedForUser(thread, userId);
+            thread.hiddenForUserIds().remove(userId);
+            thread.unreadCount = 0;
+            persistState();
         }
         int safeLimit = Math.max(1, Math.min(limit, 20));
         List<MessageRecord> visibleMessages = thread.messages().stream()
@@ -119,6 +147,7 @@ public class SocialService {
         if (attachmentKind == MessageKind.VOICE) {
             attachmentKind = MessageKind.AUDIO;
         }
+        Instant createdAt = Instant.now();
         MessageRecord message = new MessageRecord(
                 "msg-" + messageSequence.getAndIncrement(),
                 threadId,
@@ -135,7 +164,8 @@ public class SocialService {
                 request.attachmentDurationSeconds(),
                 null,
                 MessageStatus.SENT,
-                timeLabel(Instant.now())
+                timeLabel(createdAt),
+                createdAt.toString()
         );
         thread.messages().add(message);
         thread.lastMessage = renderPreviewText(message, userId);
@@ -168,6 +198,7 @@ public class SocialService {
     public void deleteThreadForMe(String userId, String threadId) {
         ThreadRecord thread = requireThread(threadId);
         ensureParticipant(thread, userId);
+        markThreadMessagesDeletedForUser(thread, userId);
         thread.hiddenForUserIds().add(userId);
         publishToUser(
                 userId,
@@ -281,6 +312,72 @@ public class SocialService {
         return toMessageResponse(recalled, userId);
     }
 
+    public ChatMessageResponse editMessage(String userId, String threadId, String messageId, EditMessageRequest request) {
+        ThreadRecord thread = requireThread(threadId);
+        ensureParticipant(thread, userId);
+        int index = indexOfMessage(thread, messageId);
+        if (index < 0) {
+            throw new NotFoundException("Message not found");
+        }
+        MessageRecord message = thread.messages().get(index);
+        if (!Objects.equals(message.senderId(), userId)) {
+            throw new ConflictException("Only the sender can edit this message");
+        }
+        if (message.status() == MessageStatus.RECALLED) {
+            throw new BadRequestException("Recalled messages cannot be edited");
+        }
+        if (message.callSummary() != null) {
+            throw new BadRequestException("Call log messages cannot be edited");
+        }
+        if (message.attachmentKind() != null && (message.text() == null || message.text().isBlank())) {
+            throw new BadRequestException("Attachment-only messages cannot be edited");
+        }
+        String nextText = request == null || request.text() == null ? "" : request.text().trim();
+        if (nextText.isBlank()) {
+            throw new BadRequestException("Message text is required");
+        }
+        Instant sentAt = parseTimeLabel(message.timeLabel());
+        if (Duration.between(sentAt, Instant.now()).compareTo(Duration.ofMinutes(15)) > 0) {
+            throw new BadRequestException("Message can no longer be edited");
+        }
+
+        MessageRecord edited = new MessageRecord(
+                message.id(),
+                message.threadId(),
+                message.senderId(),
+                nextText,
+                message.voice(),
+                message.gif(),
+                message.sticker(),
+                message.attachmentKind(),
+                message.attachmentUrl(),
+                message.attachmentPreviewUrl(),
+                message.attachmentMimeType(),
+                message.attachmentName(),
+                message.attachmentDurationSeconds(),
+                message.callSummary(),
+                message.status(),
+                message.timeLabel()
+        );
+        thread.messages().set(index, edited);
+        thread.lastMessage = previewText(thread, userId);
+        thread.updatedAt = timeLabel(Instant.now());
+        publishToThread(
+                thread,
+                RealtimeEventType.MESSAGE_UPDATED,
+                userId,
+                null,
+                thread.id(),
+                null,
+                edited.id(),
+                "Message edited",
+                renderPreviewText(edited, userId),
+                messageEventPayload(edited)
+        );
+        persistState();
+        return toMessageResponse(edited, userId);
+    }
+
     public ThreadDetailResponse markThreadRead(String userId, String threadId) {
         ThreadRecord thread = requireThread(threadId);
         ensureParticipant(thread, userId);
@@ -344,6 +441,31 @@ public class SocialService {
         );
         persistState();
         return toThreadResponse(thread, userId);
+    }
+
+    public void publishPresence(String userId, boolean online) {
+        List<String> recipients = threads.values().stream()
+                .filter(thread -> thread.participantIds().contains(userId))
+                .flatMap(thread -> participantIdsExcept(thread, userId).stream())
+                .distinct()
+                .toList();
+        if (recipients.isEmpty()) {
+            return;
+        }
+        liveDeliveryService.publish(
+                recipients,
+                realtimeEvent(
+                        RealtimeEventType.USER_PRESENCE,
+                        userId,
+                        null,
+                        null,
+                        null,
+                        null,
+                        online ? "Online" : "Offline",
+                        online ? "User is online" : "User is offline",
+                        presencePayload(userId, online)
+                )
+        );
     }
 
     public CallSessionResponse startCall(String userId, String threadId, CreateCallRequest request) {
@@ -551,23 +673,40 @@ public class SocialService {
             String body,
             String actionTarget
     ) {
+        publishRelationNotification(recipientUserId, actorUserId, kind, title, body, actionTarget, null, Map.of());
+    }
+
+    public void publishRelationNotification(
+            String recipientUserId,
+            String actorUserId,
+            String kind,
+            String title,
+            String body,
+            String actionTarget,
+            String threadId,
+            Map<String, Object> extraPayload
+    ) {
         if (recipientUserId == null || recipientUserId.isBlank()) {
             return;
         }
         NotificationKind notificationKind = parseNotificationKind(kind);
-        NotificationResponse notification = newNotification(notificationKind, recipientUserId, null, title, body, actionTarget, false);
+        NotificationResponse notification = newNotification(notificationKind, recipientUserId, threadId, title, body, actionTarget, false);
         notifications.add(notification);
+        Map<String, Object> payload = new LinkedHashMap<>(notificationPayload(notification));
+        if (extraPayload != null) {
+            payload.putAll(extraPayload);
+        }
         publishToUser(
                 recipientUserId,
                 RealtimeEventType.NOTIFICATION_CREATED,
                 actorUserId,
                 recipientUserId,
-                null,
+                threadId,
                 null,
                 null,
                 title,
                 body,
-                notificationPayload(notification)
+                payload
         );
         persistState();
     }
@@ -772,6 +911,15 @@ public class SocialService {
         return payload;
     }
 
+    private Map<String, Object> presencePayload(String userId, boolean online) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("userId", userId);
+        payload.put("online", online);
+        payload.put("state", online ? "ONLINE" : "OFFLINE");
+        payload.put("timeLabel", timeLabel(Instant.now()));
+        return payload;
+    }
+
     private Map<String, Object> notificationPayload(NotificationResponse notification) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("notificationId", notification.id());
@@ -793,6 +941,9 @@ public class SocialService {
         payload.put("senderName", accountService.getPublicProfile(message.senderId()).displayName());
         payload.put("status", message.status().name());
         payload.put("timeLabel", message.timeLabel());
+        if (message.createdAt() != null && !message.createdAt().isBlank()) {
+            payload.put("createdAt", message.createdAt());
+        }
         payload.put("text", message.status() == MessageStatus.RECALLED ? "" : message.text());
         payload.put("voice", message.voice());
         payload.put("gif", message.gif());
@@ -964,9 +1115,19 @@ public class SocialService {
                 deletedMessagesForUsers.putAll(state.deletedMessagesForUsers());
             }
 
+            boolean migratedHiddenThreads = false;
+            for (ThreadRecord thread : threads.values()) {
+                for (String hiddenUserId : thread.hiddenForUserIds()) {
+                    migratedHiddenThreads = markThreadMessagesDeletedForUser(thread, hiddenUserId) || migratedHiddenThreads;
+                }
+            }
+
             messageSequence.set(Math.max(1, state.messageSequence()));
             callSequence.set(Math.max(1, state.callSequence()));
             notificationSequence.set(Math.max(1, state.notificationSequence()));
+            if (migratedHiddenThreads) {
+                persistState();
+            }
         }, this::persistState);
     }
 
@@ -1162,6 +1323,18 @@ public class SocialService {
         return !deletedMessagesForUsers.getOrDefault(message.id(), Set.of()).contains(userId);
     }
 
+    private boolean markThreadMessagesDeletedForUser(ThreadRecord thread, String userId) {
+        boolean changed = false;
+        for (MessageRecord message : thread.messages()) {
+            Set<String> deletedForMessage = deletedMessagesForUsers
+                    .computeIfAbsent(message.id(), key -> ConcurrentHashMap.newKeySet());
+            if (deletedForMessage.add(userId)) {
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
     private String previewText(ThreadRecord thread, String userId) {
         for (int i = thread.messages().size() - 1; i >= 0; i--) {
             MessageRecord message = thread.messages().get(i);
@@ -1283,6 +1456,10 @@ public class SocialService {
     private ChatThreadResponse toThreadResponse(ThreadRecord thread, String currentUserId) {
         String otherId = thread.otherParticipant(currentUserId);
         PublicUserCard participant = accountService.getPublicProfile(otherId);
+        return toThreadResponse(thread, currentUserId, participant);
+    }
+
+    private ChatThreadResponse toThreadResponse(ThreadRecord thread, String currentUserId, PublicUserCard participant) {
         return new ChatThreadResponse(
                 thread.id(),
                 thread.type(),
@@ -1295,6 +1472,21 @@ public class SocialService {
                 thread.matchLabel(),
                 thread.updatedAt()
         );
+    }
+
+    private boolean matchesThreadSearch(PublicUserCard participant, String normalizedQuery) {
+        return containsNormalized(participant.displayName(), normalizedQuery)
+                || containsNormalized(participant.username(), normalizedQuery)
+                || containsNormalized(participant.publicId(), normalizedQuery)
+                || containsNormalized(participant.userId(), normalizedQuery);
+    }
+
+    private boolean containsNormalized(String value, String normalizedQuery) {
+        return value != null && normalize(value).contains(normalizedQuery);
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
     private ChatMessageResponse toMessageResponse(MessageRecord message, String currentUserId) {
@@ -1328,7 +1520,8 @@ public class SocialService {
                 null,
                 message.status() == MessageStatus.SEEN,
                 message.callSummary() == null ? null : summaryForCallLog(message.callSummary(), currentUserId),
-                message.status()
+                message.status(),
+                message.createdAt()
         );
     }
 
@@ -1524,7 +1717,52 @@ public class SocialService {
             Integer attachmentDurationSeconds,
             CallSummaryResponse callSummary,
             MessageStatus status,
-            String timeLabel
+            String timeLabel,
+            String createdAt
+    ) {
+        private MessageRecord(
+                String id,
+                String threadId,
+                String senderId,
+                String text,
+                boolean voice,
+                boolean gif,
+                boolean sticker,
+                MessageKind attachmentKind,
+                String attachmentUrl,
+                String attachmentPreviewUrl,
+                String attachmentMimeType,
+                String attachmentName,
+                Integer attachmentDurationSeconds,
+                CallSummaryResponse callSummary,
+                MessageStatus status,
+                String timeLabel
+        ) {
+            this(
+                    id,
+                    threadId,
+                    senderId,
+                    text,
+                    voice,
+                    gif,
+                    sticker,
+                    attachmentKind,
+                    attachmentUrl,
+                    attachmentPreviewUrl,
+                    attachmentMimeType,
+                    attachmentName,
+                    attachmentDurationSeconds,
+                    callSummary,
+                    status,
+                    timeLabel,
+                    null
+            );
+        }
+    }
+
+    private record ThreadSearchCandidate(
+            ThreadRecord thread,
+            PublicUserCard participant
     ) {
     }
 

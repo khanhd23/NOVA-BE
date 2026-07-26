@@ -2,10 +2,12 @@ package com.nova.backend.social;
 
 import com.nova.backend.auth.AuthPrincipal;
 import com.nova.backend.common.ApiResponse;
+import com.nova.backend.common.PageResponse;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -26,6 +28,16 @@ public class SocialController {
     @GetMapping("/threads")
     public ApiResponse<?> threads(@AuthenticationPrincipal AuthPrincipal principal) {
         return ApiResponse.ok(socialService.threads(principal.userId()));
+    }
+
+    @GetMapping("/threads/search")
+    public ApiResponse<PageResponse<ChatThreadResponse>> searchThreads(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @RequestParam(defaultValue = "") String q,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        return ApiResponse.ok(socialService.searchThreads(principal.userId(), q, page, size));
     }
 
     @GetMapping("/threads/{threadId}")
@@ -74,6 +86,16 @@ public class SocialController {
             @RequestBody(required = false) RecallMessageRequest request
     ) {
         return ApiResponse.ok(socialService.recallMessage(principal.userId(), threadId, messageId, request));
+    }
+
+    @PatchMapping("/threads/{threadId}/messages/{messageId}")
+    public ApiResponse<ChatMessageResponse> editMessage(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String threadId,
+            @PathVariable String messageId,
+            @Valid @RequestBody EditMessageRequest request
+    ) {
+        return ApiResponse.ok(socialService.editMessage(principal.userId(), threadId, messageId, request));
     }
 
     @PostMapping("/threads/{threadId}/read")

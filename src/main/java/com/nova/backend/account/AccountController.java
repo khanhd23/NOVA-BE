@@ -100,12 +100,14 @@ public class AccountController {
 
     @GetMapping("/users/search")
     public ApiResponse<PageResponse<PublicUserCard>> search(
+            @AuthenticationPrincipal AuthPrincipal principal,
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String gender,
             @RequestParam(required = false) String interest,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        return ApiResponse.ok(accountService.searchUsers(q, gender, interest, page, size));
+        String viewerUserId = principal == null ? null : principal.userId();
+        return ApiResponse.ok(accountService.searchUsers(viewerUserId, q, gender, interest, page, size));
     }
 }

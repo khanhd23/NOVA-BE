@@ -2,11 +2,12 @@ package com.nova.backend.community;
 
 import com.nova.backend.account.AccountService;
 import com.nova.backend.account.PublicUserCard;
+import com.nova.backend.common.PageResponse;
 import com.nova.backend.common.ModuleStateStore;
+import com.nova.backend.common.exception.BadRequestException;
 import com.nova.backend.common.exception.NotFoundException;
-import com.nova.backend.realtime.LiveDeliveryService;
-import com.nova.backend.realtime.RealtimeEvent;
-import com.nova.backend.realtime.RealtimeEventType;
+import com.nova.backend.social.SocialService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -22,7 +23,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -35,7 +35,7 @@ public class CommunityService {
     private static final Pattern MENTION_PATTERN = Pattern.compile("@([\\p{L}0-9_.-]+)");
 
     private final AccountService accountService;
-    private final LiveDeliveryService liveDeliveryService;
+    private final SocialService socialService;
     private final ModuleStateStore moduleStateStore;
     private final Map<String, CommunityTopicState> topics = new LinkedHashMap<>();
     private final Map<String, CommunityPostState> posts = new LinkedHashMap<>();
@@ -47,11 +47,11 @@ public class CommunityService {
 
     public CommunityService(
             AccountService accountService,
-            LiveDeliveryService liveDeliveryService,
+            @Lazy SocialService socialService,
             ModuleStateStore moduleStateStore
     ) {
         this.accountService = accountService;
-        this.liveDeliveryService = liveDeliveryService;
+        this.socialService = socialService;
         this.moduleStateStore = moduleStateStore;
         seed();
         loadPersistedState();
@@ -76,7 +76,7 @@ public class CommunityService {
         boolean hasMore = startIndex + page.size() < ranked.size();
         return new CommunityFeedResponse(
                 topics.values().stream().map(topic -> toTopic(topic, userId)).toList(),
-                page.stream().map(post -> toPostResponse(post, userId)).toList(),
+                toPostResponses(page, userId),
                 events.values().stream().map(event -> toEvent(event, userId)).toList(),
                 trendingTags(8),
                 List.of("TEXT", "IMAGE", "VIDEO", "MIXED", "VOICE", "LINK", "POLL"),
@@ -114,27 +114,70 @@ public class CommunityService {
     public List<CommunityPostResponse> profilePosts(String viewerUserId, String targetUserId, int size) {
         String resolvedUserId = accountService.getPublicProfile(viewerUserId, targetUserId).userId();
         int pageSize = Math.max(1, Math.min(size, 100));
-        return posts.values().stream()
+        List<CommunityPostState> page = posts.values().stream()
                 .filter(post -> Objects.equals(post.authorUserId(), resolvedUserId))
                 .sorted(Comparator.comparing(CommunityPostState::createdAt).reversed())
                 .limit(pageSize)
-                .map(post -> toPostResponse(post, viewerUserId))
                 .toList();
+        return toPostResponses(page, viewerUserId);
+    }
+
+    public PageResponse<CommunityPostResponse> searchPosts(String userId, String query, int page, int size) {
+        String normalized = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 20));
+        if (normalized.isBlank()) {
+            return new PageResponse<>(List.of(), safePage, safeSize, 0);
+        }
+        List<CommunityPostState> matched = posts.values().stream()
+                .filter(post -> post.text() != null && post.text().toLowerCase(Locale.ROOT).contains(normalized))
+                .sorted(Comparator.comparing(CommunityPostState::createdAt).reversed())
+                .toList();
+        int from = Math.min(safePage * safeSize, matched.size());
+        int to = Math.min(from + safeSize, matched.size());
+        List<CommunityPostState> pageItems = matched.subList(from, to);
+        return new PageResponse<>(
+                toPostResponses(pageItems, userId),
+                safePage,
+                safeSize,
+                matched.size()
+        );
+    }
+
+    public PageResponse<CommunityCommentResponse> comments(String userId, String postId, int page, int size) {
+        CommunityPostState post = requirePost(postId);
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 30));
+        List<CommunityCommentState> sorted = post.comments().stream()
+                .sorted(Comparator.comparing(CommunityCommentState::createdAt).reversed())
+                .toList();
+        int from = Math.min(safePage * safeSize, sorted.size());
+        int to = Math.min(from + safeSize, sorted.size());
+        List<CommunityCommentState> pageItems = sorted.subList(from, to);
+        Map<String, PublicUserCard> userCache = publicUserCacheForComments(pageItems);
+        List<CommunityCommentResponse> items = pageItems.stream()
+                .map(comment -> toCommentResponse(comment, userId, userCache))
+                .toList();
+        return new PageResponse<>(items, safePage, safeSize, sorted.size());
     }
 
     public CommunityPostResponse createPost(String userId, CreateCommunityPostRequest request) {
         CommunityTopicState topic = requireTopic(request.topicId());
         String postType = normalizePostType(request.postType());
-        List<String> tags = normalizeTags(request.tags(), request.text());
-        List<String> mentionedUserIds = resolveMentionTargets(request.mentionedUserIds(), request.text());
+        String text = request.text() == null ? "" : request.text().trim();
         List<String> mediaUrls = normalizeMediaUrls(request.mediaUrls(), request.mediaUrl());
+        if (text.isBlank() && mediaUrls.isEmpty()) {
+            throw new BadRequestException("Post content is required");
+        }
+        List<String> tags = normalizeTags(request.tags(), text);
+        List<String> mentionedUserIds = resolveMentionTargets(request.mentionedUserIds(), text);
         String primaryMediaUrl = mediaUrls.isEmpty() ? blankToNull(request.mediaUrl()) : mediaUrls.get(0);
         CommunityPostState post = new CommunityPostState(
                 "community-post-" + postSequence.getAndIncrement(),
                 topic.id(),
                 userId,
                 postType,
-                request.text().trim(),
+                text,
                 primaryMediaUrl,
                 new ArrayList<>(mediaUrls),
                 blankToNull(request.thumbnailUrl()),
@@ -160,7 +203,7 @@ public class CommunityService {
         CommunityPostState updated = current.withLikes(new ArrayList<>(likes));
         posts.put(postId, updated);
         if (liked && changed && !Objects.equals(current.authorUserId(), userId)) {
-            notifyAuthor(current.authorUserId(), userId, current, "liked your post", "COMMUNITY", "community/post/" + postId);
+            notifyAuthor(current.authorUserId(), userId, current, "liked your post", "New like", "COMMUNITY", "community/post/" + postId, null, null);
         }
         persistState();
         return toPostResponse(updated, userId);
@@ -185,7 +228,7 @@ public class CommunityService {
             notifyMentions(userId, updated, mentions, "mentioned you in a comment");
         }
         if (!Objects.equals(current.authorUserId(), userId)) {
-            notifyAuthor(current.authorUserId(), userId, updated, "commented on your post", "COMMUNITY", "community/post/" + postId);
+            notifyAuthor(current.authorUserId(), userId, updated, "commented on your post", "New comment", "COMMUNITY", "community/post/" + postId, comment.id(), comment.text());
         }
         persistState();
         return toPostResponse(updated, userId);
@@ -202,10 +245,10 @@ public class CommunityService {
         if (request != null && request.recipientUserId() != null && !request.recipientUserId().isBlank()) {
             String targetUserId = request.recipientUserId().trim();
             if (!Objects.equals(targetUserId, userId)) {
-                notifyAuthor(targetUserId, userId, updated, "shared a post with you", "COMMUNITY", "community/post/" + postId);
+                notifyAuthor(targetUserId, userId, updated, "shared a post with you", "Post shared", "COMMUNITY", "community/post/" + postId, null, null);
             }
         } else if (!Objects.equals(current.authorUserId(), userId)) {
-            notifyAuthor(current.authorUserId(), userId, updated, "shared your post", "COMMUNITY", "community/post/" + postId);
+            notifyAuthor(current.authorUserId(), userId, updated, "shared your post", "Post shared", "COMMUNITY", "community/post/" + postId, null, null);
         }
         return new ShareCommunityPostResponse(shareUrl, toPostResponse(updated, userId));
     }
@@ -424,44 +467,136 @@ public class CommunityService {
         return new EventResponse(event.id, event.title, event.kind, event.dateLabel, event.location, event.price, event.bannerUrl, event.attendees, event.joined);
     }
 
+    private List<CommunityPostResponse> toPostResponses(List<CommunityPostState> page, String currentUserId) {
+        Map<String, PublicUserCard> userCache = publicUserCache(page);
+        return page.stream().map(post -> toPostResponse(post, currentUserId, userCache)).toList();
+    }
+
     private CommunityPostResponse toPostResponse(CommunityPostState post, String currentUserId) {
-        List<CommunityCommentResponse> commentsPreview = post.comments().stream()
-                .sorted(Comparator.comparing(CommunityCommentState::createdAt).reversed())
-                .limit(3)
-                .sorted(Comparator.comparing(CommunityCommentState::createdAt))
-                .map(comment -> toCommentResponse(comment, currentUserId))
-                .toList();
+        return toPostResponse(post, currentUserId, publicUserCache(List.of(post)));
+    }
+
+    private CommunityPostResponse toPostResponse(CommunityPostState post, String currentUserId, Map<String, PublicUserCard> userCache) {
         return new CommunityPostResponse(
                 post.id(),
                 post.topicId(),
                 post.postType(),
-                accountService.getPublicProfile(post.authorUserId()),
+                cachedPublicUser(post.authorUserId(), userCache),
                 post.text(),
                 post.mediaUrl(),
                 post.mediaUrls(),
                 post.thumbnailUrl(),
                 post.tags(),
                 post.mentionedUserIds(),
+                mentionResponses(post.mentionedUserIds(), userCache),
                 post.likedByUserIds().size(),
                 post.comments().size(),
-                commentsPreview,
+                List.of(),
                 post.shareCount(),
                 post.likedByUserIds().contains(currentUserId),
                 post.sharedByUserIds().contains(currentUserId),
-                timeLabel(post.createdAt())
+                timeLabel(post.createdAt()),
+                post.createdAt().toString()
         );
     }
 
     private CommunityCommentResponse toCommentResponse(CommunityCommentState comment, String currentUserId) {
+        return toCommentResponse(comment, currentUserId, publicUserCacheForIds(List.of(comment.authorUserId())));
+    }
+
+    private CommunityCommentResponse toCommentResponse(CommunityCommentState comment, String currentUserId, Map<String, PublicUserCard> userCache) {
         return new CommunityCommentResponse(
                 comment.id(),
                 comment.postId(),
-                accountService.getPublicProfile(comment.authorUserId()),
+                cachedPublicUser(comment.authorUserId(), userCache),
                 comment.text(),
                 timeLabel(comment.createdAt()),
+                comment.createdAt().toString(),
                 Objects.equals(comment.authorUserId(), currentUserId),
-                comment.mentionedUserIds()
+                comment.mentionedUserIds(),
+                mentionResponses(comment.mentionedUserIds(), userCache)
         );
+    }
+
+    private List<CommunityMentionResponse> mentionResponses(List<String> userIds) {
+        return mentionResponses(userIds, publicUserCacheForIds(userIds == null ? List.of() : userIds));
+    }
+
+    private List<CommunityMentionResponse> mentionResponses(List<String> userIds, Map<String, PublicUserCard> userCache) {
+        if (userIds == null || userIds.isEmpty()) {
+            return List.of();
+        }
+        return userIds.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .map(userId -> {
+                    try {
+                        PublicUserCard user = cachedPublicUser(userId, userCache);
+                        return new CommunityMentionResponse(
+                                user.userId(),
+                                user.displayName(),
+                                user.username(),
+                                user.avatarUrl()
+                        );
+                    } catch (Exception ignored) {
+                        return null;
+                    }
+                })
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private Map<String, PublicUserCard> publicUserCache(List<CommunityPostState> page) {
+        LinkedHashSet<String> userIds = new LinkedHashSet<>();
+        for (CommunityPostState post : page) {
+            if (post.authorUserId() != null && !post.authorUserId().isBlank()) {
+                userIds.add(post.authorUserId());
+            }
+            if (post.mentionedUserIds() != null) {
+                post.mentionedUserIds().stream()
+                        .filter(value -> value != null && !value.isBlank())
+                        .forEach(userIds::add);
+            }
+        }
+        return publicUserCacheForIds(new ArrayList<>(userIds));
+    }
+
+    private Map<String, PublicUserCard> publicUserCacheForComments(List<CommunityCommentState> comments) {
+        LinkedHashSet<String> userIds = new LinkedHashSet<>();
+        for (CommunityCommentState comment : comments) {
+            if (comment.authorUserId() != null && !comment.authorUserId().isBlank()) {
+                userIds.add(comment.authorUserId());
+            }
+            if (comment.mentionedUserIds() != null) {
+                comment.mentionedUserIds().stream()
+                        .filter(value -> value != null && !value.isBlank())
+                        .forEach(userIds::add);
+            }
+        }
+        return publicUserCacheForIds(new ArrayList<>(userIds));
+    }
+
+    private PublicUserCard cachedPublicUser(String userId, Map<String, PublicUserCard> userCache) {
+        PublicUserCard cached = userCache.get(userId);
+        return cached == null ? accountService.getPublicProfile(userId) : cached;
+    }
+
+    private Map<String, PublicUserCard> publicUserCacheForIds(List<String> userIds) {
+        Map<String, PublicUserCard> cache = new LinkedHashMap<>();
+        if (userIds == null || userIds.isEmpty()) {
+            return cache;
+        }
+        userIds.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .forEach(userId -> {
+                    try {
+                        PublicUserCard user = accountService.getPublicProfile(userId);
+                        cache.put(user.userId(), user);
+                    } catch (Exception ignored) {
+                    }
+                });
+        return cache;
     }
 
     private List<CommunityPostState> rankedPosts(String userId, String tab, boolean refresh) {
@@ -602,70 +737,75 @@ public class CommunityService {
             if (recipientUserId == null || recipientUserId.isBlank() || Objects.equals(recipientUserId, actorUserId)) {
                 continue;
             }
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("notificationId", "community-" + post.id() + "-" + recipientUserId);
-            payload.put("kind", "COMMUNITY");
-            payload.put("read", false);
-            payload.put("actionTarget", "community/post/" + post.id());
+            Map<String, Object> payload = communityNotificationPayload(post, actor, "MENTION", null, null);
             payload.put("postId", post.id());
-            payload.put("topicId", post.topicId());
-            payload.put("threadId", "community/" + post.id());
-            payload.put("actorName", actor.displayName());
             payload.put("reason", reason);
-            payload.put("timeLabel", timeLabel(Instant.now()));
-            liveDeliveryService.publishToUser(
+            socialService.publishRelationNotification(
                     recipientUserId,
-                    new RealtimeEvent(
-                            UUID.randomUUID().toString(),
-                            RealtimeEventType.NOTIFICATION_CREATED,
-                            "community/" + post.id(),
-                            actorUserId,
-                            recipientUserId,
-                            null,
-                            null,
-                            null,
-                            actor.displayName() + " mentioned you",
-                            actor.displayName() + " mentioned you in a post",
-                            payload,
-                            Instant.now()
-                    )
+                    actorUserId,
+                    "COMMUNITY",
+                    actor.displayName() + " mentioned you",
+                    actor.displayName() + " " + reason,
+                    "community/post/" + post.id(),
+                    "community/" + post.id(),
+                    payload
             );
         }
     }
 
-    private void notifyAuthor(String recipientUserId, String actorUserId, CommunityPostState post, String reason, String kind, String actionTarget) {
+    private void notifyAuthor(
+            String recipientUserId,
+            String actorUserId,
+            CommunityPostState post,
+            String reason,
+            String title,
+            String kind,
+            String actionTarget,
+            String commentId,
+            String commentPreview
+    ) {
         if (recipientUserId == null || recipientUserId.isBlank() || Objects.equals(recipientUserId, actorUserId)) {
             return;
         }
         PublicUserCard actor = accountService.getPublicProfile(actorUserId);
+        String actionKind = reason.contains("comment") ? "COMMENT" : reason.contains("share") || reason.contains("shared") ? "SHARE" : "LIKE";
+        Map<String, Object> payload = communityNotificationPayload(post, actor, actionKind, commentId, commentPreview);
+        payload.put("reason", reason);
+        socialService.publishRelationNotification(
+                recipientUserId,
+                actorUserId,
+                kind,
+                title,
+                actor.displayName() + " " + reason,
+                actionTarget,
+                "community/" + post.id(),
+                payload
+        );
+    }
+
+    private Map<String, Object> communityNotificationPayload(
+            CommunityPostState post,
+            PublicUserCard actor,
+            String actionKind,
+            String commentId,
+            String commentPreview
+    ) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("notificationId", "community-" + post.id() + "-" + recipientUserId + "-" + kind.toLowerCase(Locale.ROOT));
-        payload.put("kind", kind);
-        payload.put("read", false);
-        payload.put("actionTarget", actionTarget);
         payload.put("postId", post.id());
         payload.put("topicId", post.topicId());
         payload.put("threadId", "community/" + post.id());
+        payload.put("actorId", actor.userId());
         payload.put("actorName", actor.displayName());
-        payload.put("reason", reason);
-        payload.put("timeLabel", timeLabel(Instant.now()));
-        liveDeliveryService.publishToUser(
-                recipientUserId,
-                new RealtimeEvent(
-                        UUID.randomUUID().toString(),
-                        RealtimeEventType.NOTIFICATION_CREATED,
-                        "community/" + post.id(),
-                        actorUserId,
-                        recipientUserId,
-                        null,
-                        null,
-                        null,
-                        actor.displayName() + " " + reason,
-                        actor.displayName() + " " + reason,
-                        payload,
-                        Instant.now()
-                )
-        );
+        payload.put("actorAvatarUrl", actor.avatarUrl());
+        payload.put("actionKind", actionKind);
+        payload.put("postPreview", post.text() == null ? "" : post.text().trim());
+        if (commentId != null && !commentId.isBlank()) {
+            payload.put("commentId", commentId);
+        }
+        if (commentPreview != null && !commentPreview.isBlank()) {
+            payload.put("commentPreview", commentPreview.trim());
+        }
+        return payload;
     }
 
     private String normalizePostType(String value) {

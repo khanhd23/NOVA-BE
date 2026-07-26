@@ -38,13 +38,15 @@ record CommunityPostResponse(
         String thumbnailUrl,
         List<String> tags,
         List<String> mentionedUserIds,
+        List<CommunityMentionResponse> mentions,
         int likes,
         int comments,
         List<CommunityCommentResponse> commentsPreview,
         int shares,
         boolean likedByMe,
         boolean sharedByMe,
-        String timeLabel
+        String timeLabel,
+        String createdAt
 ) {
 }
 
@@ -54,8 +56,18 @@ record CommunityCommentResponse(
         PublicUserCard author,
         String text,
         String timeLabel,
+        String createdAt,
         boolean mine,
-        List<String> mentionedUserIds
+        List<String> mentionedUserIds,
+        List<CommunityMentionResponse> mentions
+) {
+}
+
+record CommunityMentionResponse(
+        String userId,
+        String displayName,
+        String username,
+        String avatarUrl
 ) {
 }
 
@@ -79,7 +91,7 @@ record JoinRequest(
 
 record CreateCommunityPostRequest(
         @NotBlank String topicId,
-        @NotBlank String text,
+        String text,
         String mediaUrl,
         List<String> mediaUrls,
         String thumbnailUrl,

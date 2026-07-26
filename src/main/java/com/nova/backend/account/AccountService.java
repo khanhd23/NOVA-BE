@@ -189,6 +189,17 @@ public class AccountService {
         return toMe(updated);
     }
 
+    public boolean setOnline(String userId, boolean online) {
+        AccountRecord existing = accounts.get(userId);
+        if (existing == null || existing.online() == online) {
+            return false;
+        }
+        AccountRecord updated = existing.withOnline(online);
+        accounts.put(userId, updated);
+        persistAccount(updated);
+        return true;
+    }
+
     public PublicUserCard getPublicProfile(String userId) {
         return toPublicCard(resolveAccountByKey(userId), null);
     }
@@ -249,11 +260,15 @@ public class AccountService {
     }
 
     public PageResponse<PublicUserCard> searchUsers(String query, String gender, String interest, int page, int size) {
+        return searchUsers(null, query, gender, interest, page, size);
+    }
+
+    public PageResponse<PublicUserCard> searchUsers(String viewerUserId, String query, String gender, String interest, int page, int size) {
         String normalized = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         String normalizedGender = gender == null ? "" : gender.trim().toLowerCase(Locale.ROOT);
         String normalizedInterest = interest == null ? "" : interest.trim().toLowerCase(Locale.ROOT);
         List<PublicUserCard> items = accounts.values().stream()
-                .map(this::toPublicCard)
+                .map(account -> toPublicCard(account, viewerUserId))
                 .filter(card -> normalized.isBlank()
                         || card.displayName().toLowerCase(Locale.ROOT).contains(normalized)
                         || (card.publicId() != null && card.publicId().toLowerCase(Locale.ROOT).contains(normalized))
@@ -982,6 +997,7 @@ public class AccountService {
                 account.interests(),
                 account.age(),
                 account.city(),
+                account.gender(),
                 account.verified(),
                 account.online(),
                 activePremium,
@@ -1323,12 +1339,13 @@ public class AccountService {
             String newAvatar = requestedAvatar == null || requestedAvatar.isBlank()
                     ? (avatarUrl.isBlank() ? defaultAvatarUrl(newDisplayName) : avatarUrl)
                     : requestedAvatar.trim();
-            List<String> newFeaturedPhotos = request.featuredPhotos() == null
-                    ? featuredPhotos
-                    : cleanList(request.featuredPhotos(), 3);
+              List<String> newFeaturedPhotos = request.featuredPhotos() == null
+                      ? featuredPhotos
+                      : cleanList(request.featuredPhotos(), 5);
             List<String> newInterests = request.interests() == null
                     ? interests
                     : cleanList(request.interests(), 12);
+            String newGender = normalizeGender(request.gender(), gender);
             boolean newProfileComplete = !newDisplayName.isBlank() && !newAvatar.isBlank();
             boolean newOnboardingComplete = onboardingComplete || newProfileComplete;
             return new AccountRecord(
@@ -1341,7 +1358,7 @@ public class AccountService {
                     newFeaturedPhotos,
                     newInterests,
                     request.age() == null ? age : request.age(),
-                    gender,
+                    newGender,
                     request.city() == null ? city : request.city(),
                     verified,
                     online,
@@ -1360,6 +1377,18 @@ public class AccountService {
                     wallet,
                     entitlements
             );
+        }
+
+        private static String normalizeGender(String requestedGender, String fallback) {
+            if (requestedGender == null || requestedGender.isBlank()) {
+                return fallback;
+            }
+            String normalized = requestedGender.trim().toLowerCase(Locale.ROOT);
+            return switch (normalized) {
+                case "male", "nam" -> "Male";
+                case "female", "nu", "nữ" -> "Female";
+                default -> fallback;
+            };
         }
 
         AccountRecord updateSettings(UpdateSettingsRequest request) {
@@ -1503,6 +1532,38 @@ public class AccountService {
                     gender,
                     verified,
                     online,
+                    premium,
+                    vipTierId,
+                    vipTierName,
+                    vipExpiresAt,
+                    diamondBalance,
+                    onboardingComplete,
+                    profileComplete,
+                    providerKey,
+                    distanceKm,
+                    settings,
+                    stats,
+                    badges,
+                    wallet,
+                    entitlements
+            );
+        }
+
+        AccountRecord withOnline(boolean newOnline) {
+            return new AccountRecord(
+                    userId,
+                    publicId,
+                    displayName,
+                    username,
+                    bio,
+                    avatarUrl,
+                    featuredPhotos,
+                    interests,
+                    age,
+                    city,
+                    gender,
+                    verified,
+                    newOnline,
                     premium,
                     vipTierId,
                     vipTierName,
