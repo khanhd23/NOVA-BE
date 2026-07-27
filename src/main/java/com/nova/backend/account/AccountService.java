@@ -18,8 +18,6 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -55,6 +53,26 @@ public class AccountService {
     private final AtomicInteger userSequence = new AtomicInteger(100);
     private static final long PUBLIC_ID_MIN = 100_000_000L;
     private static final long PUBLIC_ID_MAX = 999_999_999L;
+    private static final String DEFAULT_NEW_USER_BIO = "I'm new here.";
+    private static final Set<String> LEGACY_DEMO_USER_IDS = Set.of(
+            "u-current",
+            "u-seraphina",
+            "u-elena",
+            "u-marcus",
+            "u-chloe",
+            "u-alex",
+            "u-mina"
+    );
+    private static final Set<String> LEGACY_DEMO_PROVIDER_KEYS = Set.of(
+            "GOOGLE:dev:current",
+            "FACEBOOK:dev:current",
+            "GOOGLE:dev:seraphina",
+            "FACEBOOK:dev:elena",
+            "GOOGLE:dev:marcus",
+            "FACEBOOK:dev:chloe",
+            "GOOGLE:dev:alex",
+            "GOOGLE:dev:mina"
+    );
     private final AtomicLong publicIdSequence = new AtomicLong(PUBLIC_ID_MIN);
 
     public AccountService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper, @Lazy SocialService socialService) {
@@ -129,8 +147,7 @@ public class AccountService {
 
         loadPersistedAccounts();
         loadFollowRelations();
-        seedUsers();
-        seedFollowRelations();
+        removeLegacyDemoAccountsFromMemory();
         ensurePublicIds();
         refreshUserSequence();
         refreshPublicIdSequence();
@@ -140,7 +157,17 @@ public class AccountService {
         String providerKey = AccountService.providerKey(identity.provider().name(), identity.providerUserId());
         String userId = providerLinks.get(providerKey);
         if (userId == null) {
-            userId = "u-" + userSequence.getAndIncrement();
+            String reservedUserId = reservedDevUserId(providerKey);
+            if (reservedUserId != null && accounts.containsKey(reservedUserId)) {
+                AccountRecord existing = requireAccount(reservedUserId);
+                AccountRecord updated = ensurePublicId(existing.withIdentity(identity));
+                accounts.put(reservedUserId, updated);
+                linkProvider(reservedUserId, providerKey);
+                registerPublicId(updated);
+                persistAccount(updated);
+                return reservedUserId;
+            }
+            userId = reservedUserId == null ? "u-" + userSequence.getAndIncrement() : reservedUserId;
             AccountRecord record = AccountRecord.newFromIdentity(userId, generatePublicId(), identity);
             accounts.put(userId, record);
             linkProvider(userId, providerKey);
@@ -368,152 +395,31 @@ public class AccountService {
         return List.of("Discover", "Messages", "Calls", "Community", "Premium", "Settings");
     }
 
-    private void seedUsers() {
-        upsertSeed(AccountRecord.seed(
-                "u-current",
-                "100000001",
-                "Nova User",
-                "you",
-                26,
-                "Not specified",
-                "New York",
-                "Default logged-in account for local testing.",
-                "https://cdn.nova/avatar/current.jpg",
-                true,
-                true,
-                false,
-                true,
-                "GOOGLE:dev:current",
-                0
-        ));
-        upsertSeed(AccountRecord.seed(
-                "u-seraphina",
-                "100000002",
-                "Seraphina Vale",
-                "seraphina",
-                27,
-                "Female",
-                "Lagos",
-                "Design lead who answers late-night voice notes.",
-                "https://cdn.nova/avatar/seraphina.jpg",
-                true,
-                true,
-                false,
-                true,
-                "GOOGLE:dev:seraphina",
-                2
-        ));
-        upsertSeed(AccountRecord.seed(
-                "u-elena",
-                "100000003",
-                "Elena Markov",
-                "elena",
-                25,
-                "Female",
-                "Amsterdam",
-                "Builds community products and never misses a call.",
-                "https://cdn.nova/avatar/elena.jpg",
-                true,
-                true,
-                true,
-                true,
-                "FACEBOOK:dev:elena",
-                5
-        ));
-        upsertSeed(AccountRecord.seed(
-                "u-marcus",
-                "100000004",
-                "Marcus Reed",
-                "marcus",
-                29,
-                "Male",
-                "Berlin",
-                "Product engineer, coffee, and a lot of tabs.",
-                "https://cdn.nova/avatar/marcus.jpg",
-                false,
-                false,
-                false,
-                true,
-                "GOOGLE:dev:marcus",
-                8
-        ));
-        upsertSeed(AccountRecord.seed(
-                "u-chloe",
-                "100000005",
-                "Chloe Rivera",
-                "chloe",
-                24,
-                "Female",
-                "Barcelona",
-                "Photographer, traveler, and voice call enthusiast.",
-                "https://cdn.nova/avatar/chloe.jpg",
-                true,
-                true,
-                false,
-                true,
-                "FACEBOOK:dev:chloe",
-                3
-        ));
-        upsertSeed(AccountRecord.seed(
-                "u-alex",
-                "100000006",
-                "Alex Johnson",
-                "alex",
-                28,
-                "Male",
-                "Singapore",
-                "Always testing new features before release.",
-                "https://cdn.nova/avatar/alex.jpg",
-                false,
-                true,
-                false,
-                true,
-                "GOOGLE:dev:alex",
-                1
-        ));
-        upsertSeed(AccountRecord.seed(
-                "u-mina",
-                "100000007",
-                "Mina Park",
-                "mina",
-                26,
-                "Female",
-                "Seoul",
-                "Community builder and evening runner.",
-                "https://cdn.nova/avatar/mina.jpg",
-                true,
-                false,
-                false,
-                false,
-                "GOOGLE:dev:mina",
-                6
-        ));
-        linkProvider("u-current", "FACEBOOK:dev:current");
+    private String reservedDevUserId(String providerKey) {
+        return switch (providerKey) {
+            case "GOOGLE:dev:current", "FACEBOOK:dev:current" -> "u-current";
+            default -> null;
+        };
     }
 
-    private void seedFollowRelations() {
-        seedFollowRelation("u-current", "u-seraphina");
-        seedFollowRelation("u-seraphina", "u-current");
-        seedFollowRelation("u-current", "u-elena");
-        seedFollowRelation("u-elena", "u-current");
-        seedFollowRelation("u-chloe", "u-current");
-        seedFollowRelation("u-current", "u-marcus");
-        seedFollowRelation("u-mina", "u-current");
-    }
-
-    private void seedFollowRelation(String followerUserId, String followeeUserId) {
-        if (accounts.containsKey(followerUserId) && accounts.containsKey(followeeUserId)) {
-            addFollowRelation(followerUserId, followeeUserId);
+    private void removeLegacyDemoAccountsFromMemory() {
+        for (String userId : LEGACY_DEMO_USER_IDS) {
+            AccountRecord removed = accounts.remove(userId);
+            if (removed != null && removed.publicId() != null) {
+                userIdByPublicId.remove(removed.publicId());
+            }
         }
-    }
-
-    private void upsertSeed(AccountRecord seed) {
-        if (accounts.containsKey(seed.userId()) || providerLinks.containsKey(seed.providerKey())) {
-            return;
-        }
-        accounts.put(seed.userId(), seed);
-        linkProvider(seed.userId(), seed.providerKey());
-        persistAccount(seed);
+        publicIdByUserId.keySet().removeIf(LEGACY_DEMO_USER_IDS::contains);
+        userIdByPublicId.entrySet().removeIf(entry -> LEGACY_DEMO_USER_IDS.contains(entry.getValue()));
+        providerLinks.entrySet().removeIf(entry ->
+                LEGACY_DEMO_PROVIDER_KEYS.contains(entry.getKey()) || LEGACY_DEMO_USER_IDS.contains(entry.getValue())
+        );
+        linkedProviderKeysByUserId.keySet().removeIf(LEGACY_DEMO_USER_IDS::contains);
+        linkedProviderKeysByUserId.values().forEach(keys -> keys.removeIf(LEGACY_DEMO_PROVIDER_KEYS::contains));
+        followingByUserId.keySet().removeIf(LEGACY_DEMO_USER_IDS::contains);
+        followersByUserId.keySet().removeIf(LEGACY_DEMO_USER_IDS::contains);
+        followingByUserId.values().forEach(userIds -> userIds.removeAll(LEGACY_DEMO_USER_IDS));
+        followersByUserId.values().forEach(userIds -> userIds.removeAll(LEGACY_DEMO_USER_IDS));
     }
 
     private void loadPersistedAccounts() {
@@ -1126,20 +1032,18 @@ public class AccountService {
     ) {
         static AccountRecord newFromIdentity(String userId, String publicId, SocialIdentity identity) {
             String username = slug(identity.displayName());
-            String avatarUrl = identity.avatarUrl().isBlank()
-                    ? defaultAvatarUrl(identity.displayName())
-                    : identity.avatarUrl();
+            String avatarUrl = identity.avatarUrl() == null ? "" : identity.avatarUrl().trim();
             return new AccountRecord(
                     userId,
                     publicId,
                     identity.displayName(),
                     username,
-                    "",
+                    DEFAULT_NEW_USER_BIO,
                     avatarUrl,
                     List.of(),
-                    List.of("Music", "Travel", "Coffee"),
-                    24,
-                    "Unknown",
+                    List.of(),
+                    0,
+                    "",
                     "Not specified",
                     false,
                     true,
@@ -1166,141 +1070,16 @@ public class AccountService {
                             false,
                             true
                     ),
-                    new ProfileStatsResponse("12.4K", "1.2K", "148", "86", "2.3K"),
-                    List.of(
-                            new BadgeResponse("badge_verified", "Verified profile", "Identity confirmed", 100, "Verified", false),
-                            new BadgeResponse("badge_social", "Social butterfly", "Active in chat and calls", 72, "Chat", true),
-                            new BadgeResponse("badge_match", "Fast match", "Close the loop quickly", 34, "Heart", false)
-                    ),
-                    List.of(
-                            new WalletEntryResponse("wallet_01", "Nova credits", "Bonus from invite", "+120", "Today", true),
-                            new WalletEntryResponse("wallet_02", "Premium refund", "Call issue reversal", "-20", "Yesterday", false)
-                    ),
+                    emptyStats(),
+                    List.of(),
+                    List.of(),
                     buildEntitlements(false, null, null, null)
             );
         }
 
-        static AccountRecord seed(
-                String userId,
-                String publicId,
-                String displayName,
-                String username,
-                int age,
-                String gender,
-                String city,
-                String bio,
-                String avatarUrl,
-                boolean verified,
-                boolean online,
-                boolean premium,
-                boolean onboardingComplete,
-                String providerKey,
-                Integer distanceKm
-        ) {
-            return seed(
-                    userId,
-                    publicId,
-                    displayName,
-                    username,
-                    age,
-                    gender,
-                    city,
-                    bio,
-                    avatarUrl,
-                    verified,
-                    online,
-                    premium,
-                    onboardingComplete,
-                    providerKey,
-                    distanceKm,
-                    null,
-                    null,
-                    null,
-                    0L,
-                    List.of(),
-                    List.of()
-            );
-        }
-
-        static AccountRecord seed(
-                String userId,
-                String publicId,
-                String displayName,
-                String username,
-                int age,
-                String gender,
-                String city,
-                String bio,
-                String avatarUrl,
-                boolean verified,
-                boolean online,
-                boolean premium,
-                boolean onboardingComplete,
-                String providerKey,
-                Integer distanceKm,
-                String vipTierId,
-                String vipTierName,
-                Instant vipExpiresAt,
-                long diamondBalance,
-                List<String> featuredPhotos,
-                List<String> interests
-        ) {
-            boolean profileComplete = !displayName.isBlank() && !avatarUrl.isBlank();
-            boolean activePremium = premium && (vipExpiresAt == null || vipExpiresAt.isAfter(Instant.now()));
-            return new AccountRecord(
-                    userId,
-                    publicId,
-                    displayName,
-                    username,
-                    bio,
-                    avatarUrl,
-                    cleanList(featuredPhotos, 3),
-                    cleanList(interests, 12),
-                    age,
-                    gender,
-                    city,
-                    verified,
-                    online,
-                    premium,
-                    vipTierId,
-                    vipTierName,
-                    vipExpiresAt,
-                    diamondBalance,
-                    onboardingComplete,
-                    profileComplete,
-                    providerKey,
-                    distanceKm,
-                    new AppSettingsResponse(
-                            true,
-                            "English",
-                            true,
-                            true,
-                            true,
-                            false,
-                            false,
-                            activePremium,
-                            true,
-                            true,
-                            false,
-                            true
-                    ),
-                    new ProfileStatsResponse("12.4K", "1.2K", "148", "86", "2.3K"),
-                    List.of(
-                            new BadgeResponse("badge_verified", "Verified profile", "Identity confirmed", 100, "Verified", verified),
-                            new BadgeResponse("badge_social", "Social butterfly", "Active in chat and calls", 72, "Chat", true),
-                            new BadgeResponse("badge_match", "Fast match", "Close the loop quickly", 34, "Heart", false)
-                    ),
-                    List.of(
-                            new WalletEntryResponse("wallet_01", "Nova credits", "Bonus from invite", "+120", "Today", true),
-                            new WalletEntryResponse("wallet_02", "Premium refund", "Call issue reversal", "-20", "Yesterday", false)
-                    ),
-                    buildEntitlements(activePremium, vipTierId, vipTierName, vipExpiresAt)
-            );
-        }
-
         AccountRecord withIdentity(SocialIdentity identity) {
-            String newAvatar = identity.avatarUrl().isBlank() ? avatarUrl : identity.avatarUrl();
-            String resolvedAvatar = newAvatar.isBlank() ? defaultAvatarUrl(identity.displayName()) : newAvatar;
+            String identityAvatar = identity.avatarUrl() == null ? "" : identity.avatarUrl().trim();
+            String resolvedAvatar = identityAvatar.isBlank() ? avatarUrl : identityAvatar;
             return new AccountRecord(
                     userId,
                     publicId,
@@ -1311,8 +1090,8 @@ public class AccountService {
                     featuredPhotos,
                     interests,
                     age,
-                    gender,
                     city,
+                    gender,
                     verified,
                     online,
                     premium,
@@ -1337,7 +1116,7 @@ public class AccountService {
             String newBio = request.bio() == null ? bio : request.bio();
             String requestedAvatar = request.photoUrl();
             String newAvatar = requestedAvatar == null || requestedAvatar.isBlank()
-                    ? (avatarUrl.isBlank() ? defaultAvatarUrl(newDisplayName) : avatarUrl)
+                    ? avatarUrl
                     : requestedAvatar.trim();
               List<String> newFeaturedPhotos = request.featuredPhotos() == null
                       ? featuredPhotos
@@ -1358,8 +1137,8 @@ public class AccountService {
                     newFeaturedPhotos,
                     newInterests,
                     request.age() == null ? age : request.age(),
-                    newGender,
                     request.city() == null ? city : request.city(),
+                    newGender,
                     verified,
                     online,
                     premium,
@@ -1416,8 +1195,8 @@ public class AccountService {
                     featuredPhotos,
                     interests,
                     age,
-                    gender,
                     city,
+                    gender,
                     verified,
                     online,
                     premium,
@@ -1463,8 +1242,8 @@ public class AccountService {
                     featuredPhotos,
                     interests,
                     age,
-                    gender,
                     city,
+                    gender,
                     verified,
                     online,
                     true,
@@ -1496,8 +1275,8 @@ public class AccountService {
                     featuredPhotos,
                     interests,
                     age,
-                    gender,
                     city,
+                    gender,
                     verified,
                     online,
                     premium,
@@ -1587,6 +1366,10 @@ public class AccountService {
             return updated;
         }
 
+        private static ProfileStatsResponse emptyStats() {
+            return new ProfileStatsResponse("0", "0", "0", "0", "0");
+        }
+
         private static List<EntitlementResponse> buildEntitlements(boolean activePremium, String tierId, String tierName, Instant expiresAt) {
             List<EntitlementResponse> items = new ArrayList<>();
             items.add(new EntitlementResponse("free_swipes", "Daily swipes", true, "20/day", "Reset every morning"));
@@ -1623,9 +1406,4 @@ public class AccountService {
         return cleaned.isEmpty() ? List.of() : cleaned;
     }
 
-    private static String defaultAvatarUrl(String displayName) {
-        String safeName = (displayName == null || displayName.isBlank()) ? "Nova User" : displayName.trim();
-        String encoded = URLEncoder.encode(safeName, StandardCharsets.UTF_8);
-        return "https://ui-avatars.com/api/?name=" + encoded + "&background=6C5CE7&color=FFFFFF&size=512";
-    }
 }

@@ -41,12 +41,7 @@ public class SafetyService {
     }
 
     public List<AdminMetricResponse> metrics() {
-        return List.of(
-                new AdminMetricResponse("Active users", "18.4K", "+8.1%"),
-                new AdminMetricResponse("Open reports", "14", "-3 today"),
-                new AdminMetricResponse("Call success rate", "94%", "24h"),
-                new AdminMetricResponse("Message delivery", "99.2%", "Realtime")
-        );
+        return List.of();
     }
 
     public SafetyDashboardResponse dashboard() {
@@ -63,14 +58,7 @@ public class SafetyService {
             if (state.recentActions() != null) {
                 recentActions.addAll(state.recentActions());
             }
-        }, this::seedDefaults);
-    }
-
-    private void seedDefaults() {
-        recentActions.add(new SafetyActionResponse("reviewed", "2 reports reviewed today"));
-        recentActions.add(new SafetyActionResponse("verified", "1 identity verified"));
-        recentActions.add(new SafetyActionResponse("blocked", "1 account blocked"));
-        persistState();
+        }, this::persistState);
     }
 
     private void persistState() {

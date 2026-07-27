@@ -34,6 +34,23 @@ import java.util.UUID;
 @Service
 public class SocialService {
 
+    private static final Set<String> LEGACY_DEMO_USER_IDS = Set.of(
+            "u-current",
+            "u-seraphina",
+            "u-elena",
+            "u-marcus",
+            "u-chloe",
+            "u-alex",
+            "u-mina"
+    );
+    private static final Set<String> LEGACY_DEMO_THREAD_IDS = Set.of(
+            "thread-seraphina",
+            "thread-elena",
+            "thread-chloe",
+            "thread-marcus"
+    );
+    private static final Set<String> LEGACY_DEMO_CALL_IDS = Set.of("call_seed_1", "call_seed_2");
+
     private final AccountService accountService;
     private final LiveDeliveryService liveDeliveryService;
     private final ModuleStateStore moduleStateStore;
@@ -49,7 +66,6 @@ public class SocialService {
         this.accountService = accountService;
         this.liveDeliveryService = liveDeliveryService;
         this.moduleStateStore = moduleStateStore;
-        seed();
         loadPersistedState();
     }
 
@@ -1026,69 +1042,6 @@ public class SocialService {
         return payload;
     }
 
-    private void seed() {
-        seedThread("thread-seraphina", "u-seraphina", List.of(
-                new MessageRecord("m1", "thread-seraphina", "u-seraphina", "Hey, are you free later?", false, false, false, null, null, null, null, null, null, null, MessageStatus.SEEN, "09:12"),
-                new MessageRecord("m2-call", "thread-seraphina", "u-seraphina", "", false, false, false,
-                        MessageKind.CALL_LOG,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        new CallSummaryResponse("call_seed_1", "Seraphina Vale", CallType.VOICE, CallDirection.INCOMING, 0, CallEndReason.MISSED, "09:14", "09:15", true, false),
-                        MessageStatus.SEEN, "09:15"),
-                new MessageRecord("m3", "thread-seraphina", "u-current", "Yes, I can chat after 6.", true, false, false, null, null, null, null, null, null, null, MessageStatus.SEEN, "09:18")
-        ), true, false, "New match");
-
-        seedThread("thread-elena", "u-elena", List.of(
-                new MessageRecord("m4-call", "thread-elena", "u-elena", "", false, false, false,
-                        MessageKind.CALL_LOG,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        new CallSummaryResponse("call_seed_2", "Elena Markov", CallType.VIDEO, CallDirection.OUTGOING, 172, CallEndReason.COMPLETED, "11:00", "11:03", true, true),
-                        MessageStatus.SEEN, "11:03"),
-                new MessageRecord("m5", "thread-elena", "u-elena", "Need feedback on the new call UI.", false, false, false, null, null, null, null, null, null, null, MessageStatus.DELIVERED, "11:05"),
-                new MessageRecord("m6", "thread-elena", "u-current", "Looks good, I will trim the call summary card.", true, false, false, null, null, null, null, null, null, null, MessageStatus.SEEN, "11:07")
-        ), true, false, "Shared interests");
-
-        seedThread("thread-chloe", "u-chloe", List.of(
-                new MessageRecord("m7", "thread-chloe", "u-chloe", "Travel recs for Bali?", false, false, false, null, null, null, null, null, null, null, MessageStatus.DELIVERED, "13:41"),
-                new MessageRecord("m8", "thread-chloe", "u-current", "Yes, I can send a list tonight.", true, false, false, null, null, null, null, null, null, null, MessageStatus.SENT, "13:44")
-        ), false, true, "Photography");
-
-        seedThread("thread-marcus", "u-marcus", List.of(
-                new MessageRecord("m9", "thread-marcus", "u-marcus", "Can you review the build config later?", false, false, false, null, null, null, null, null, null, null, MessageStatus.SEEN, "16:20")
-        ), false, false, "Android");
-
-        calls.put("call_seed_1", new CallRecord("call_seed_1", "thread-seraphina", "u-seraphina", "u-current", CallType.VOICE, CallDirection.INCOMING, Instant.now().minusSeconds(4200), null, Instant.now().minusSeconds(4140), 0, CallEndReason.MISSED, true, false, false, "ENDED"));
-        calls.put("call_seed_2", new CallRecord("call_seed_2", "thread-elena", "u-current", "u-elena", CallType.VIDEO, CallDirection.OUTGOING, Instant.now().minusSeconds(3200), Instant.now().minusSeconds(3090), Instant.now().minusSeconds(3030), 172, CallEndReason.COMPLETED, true, true, false, "ENDED"));
-
-        notifications.add(newNotification(NotificationKind.MESSAGE, "u-current", "thread/thread-seraphina", "Seraphina replied", "Open the latest message", "thread/thread-seraphina", false));
-        notifications.add(newNotification(NotificationKind.CALL, "u-current", "thread/thread-elena", "Missed call", "Elena tried to call you", "call/call_seed_1", false));
-    }
-
-    private void seedThread(String id, String otherParticipantId, List<MessageRecord> initialMessages, boolean online, boolean typing, String matchLabel) {
-        ThreadRecord thread = new ThreadRecord(
-                id,
-                ThreadType.DIRECT,
-                List.of("u-current", otherParticipantId),
-                new CopyOnWriteArrayList<>(initialMessages),
-                initialMessages.isEmpty() ? "" : initialMessages.get(initialMessages.size() - 1).text(),
-                1,
-                online,
-                typing,
-                false,
-                matchLabel,
-                timeLabel(Instant.now()),
-                null
-        );
-        threads.put(id, thread);
-    }
-
     private void loadPersistedState() {
         moduleStateStore.load("social", SocialState.class).ifPresentOrElse(state -> {
             threads.clear();
@@ -1115,6 +1068,7 @@ public class SocialService {
                 deletedMessagesForUsers.putAll(state.deletedMessagesForUsers());
             }
 
+            boolean cleanedLegacyDemoState = removeLegacyDemoState();
             boolean migratedHiddenThreads = false;
             for (ThreadRecord thread : threads.values()) {
                 for (String hiddenUserId : thread.hiddenForUserIds()) {
@@ -1125,10 +1079,37 @@ public class SocialService {
             messageSequence.set(Math.max(1, state.messageSequence()));
             callSequence.set(Math.max(1, state.callSequence()));
             notificationSequence.set(Math.max(1, state.notificationSequence()));
-            if (migratedHiddenThreads) {
+            if (cleanedLegacyDemoState || migratedHiddenThreads) {
                 persistState();
             }
         }, this::persistState);
+    }
+
+    private boolean removeLegacyDemoState() {
+        boolean removed = threads.entrySet().removeIf(entry ->
+                LEGACY_DEMO_THREAD_IDS.contains(entry.getKey())
+                        || entry.getValue().participantIds().stream().anyMatch(LEGACY_DEMO_USER_IDS::contains)
+        );
+        removed = calls.entrySet().removeIf(entry ->
+                LEGACY_DEMO_CALL_IDS.contains(entry.getKey())
+                        || LEGACY_DEMO_USER_IDS.contains(entry.getValue().initiatorId())
+                        || LEGACY_DEMO_USER_IDS.contains(entry.getValue().partnerId())
+        ) || removed;
+        removed = notifications.removeIf(notification ->
+                LEGACY_DEMO_USER_IDS.contains(notification.recipientUserId())
+                        || referencesLegacyDemo(notification.threadId())
+                        || referencesLegacyDemo(notification.actionTarget())
+        ) || removed;
+        deletedMessagesForUsers.values().forEach(userIds -> userIds.removeAll(LEGACY_DEMO_USER_IDS));
+        return removed;
+    }
+
+    private boolean referencesLegacyDemo(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        return LEGACY_DEMO_THREAD_IDS.stream().anyMatch(value::contains)
+                || LEGACY_DEMO_CALL_IDS.stream().anyMatch(value::contains);
     }
 
     private void persistState() {

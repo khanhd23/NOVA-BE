@@ -33,6 +33,20 @@ public class CommunityService {
 
     private static final Pattern TAG_PATTERN = Pattern.compile("#([\\p{L}0-9_]+)");
     private static final Pattern MENTION_PATTERN = Pattern.compile("@([\\p{L}0-9_.-]+)");
+    private static final String DEFAULT_TOPIC_ID = "general";
+    private static final Set<String> LEGACY_DEMO_TOPIC_IDS = Set.of("topic-product", "topic-photo", "topic-travel");
+    private static final Set<String> LEGACY_DEMO_POST_IDS = Set.of("cpost-1", "cpost-2", "cpost-3", "cpost-4");
+    private static final Set<String> LEGACY_DEMO_EVENT_IDS = Set.of("event-design-night", "event-photo-walk", "event-community-qna");
+    private static final Set<String> LEGACY_DEMO_TAGS = Set.of(
+            "product",
+            "compose",
+            "ux",
+            "photography",
+            "travel",
+            "goldenhour",
+            "weekend",
+            "bali"
+    );
 
     private final AccountService accountService;
     private final SocialService socialService;
@@ -53,7 +67,6 @@ public class CommunityService {
         this.accountService = accountService;
         this.socialService = socialService;
         this.moduleStateStore = moduleStateStore;
-        seed();
         loadPersistedState();
     }
 
@@ -162,7 +175,7 @@ public class CommunityService {
     }
 
     public CommunityPostResponse createPost(String userId, CreateCommunityPostRequest request) {
-        CommunityTopicState topic = requireTopic(request.topicId());
+        CommunityTopicState topic = resolveTopicForPost(request.topicId());
         String postType = normalizePostType(request.postType());
         String text = request.text() == null ? "" : request.text().trim();
         List<String> mediaUrls = normalizeMediaUrls(request.mediaUrls(), request.mediaUrl());
@@ -306,105 +319,6 @@ public class CommunityService {
         return toEvent(updated, userId);
     }
 
-    private void seed() {
-        topics.put("topic-product", new CommunityTopicState("topic-product", "Product Design", "Discussions about clean UX and product details.", "https://cdn.nova/community/product.jpg", "1.2K members", "Elena Markov", 6, true));
-        topics.put("topic-photo", new CommunityTopicState("topic-photo", "Photography", "Share shots, gear, and editing tips.", "https://cdn.nova/community/photo.jpg", "842 members", "Chloe Rivera", 3, false));
-        topics.put("topic-travel", new CommunityTopicState("topic-travel", "Travel", "Weekend trips, hidden spots, and city guides.", "https://cdn.nova/community/travel.jpg", "3.1K members", "Mina Park", 9, false));
-
-        seedPost(new CommunityPostState(
-                "cpost-1",
-                "topic-product",
-                "u-elena",
-                "TEXT",
-                "We should keep call summary cards minimal and centered.",
-                null,
-                List.of(),
-                null,
-                List.of("product", "compose", "ux"),
-                List.of(),
-                List.of("u-current"),
-                List.of(),
-                List.of(
-                        new CommunityCommentState("cpost-1-c1", "cpost-1", "u-chloe", "Agree. The CTA should stay in one place.", List.of(), Instant.now().minusSeconds(4200)),
-                        new CommunityCommentState("cpost-1-c2", "cpost-1", "u-mina", "Less noise, better focus.", List.of(), Instant.now().minusSeconds(2600))
-                ),
-                2,
-                Instant.now().minusSeconds(1080)
-        ));
-        seedPost(new CommunityPostState(
-                "cpost-2",
-                "topic-photo",
-                "u-chloe",
-                "IMAGE",
-                "Golden hour still wins every time.",
-                "https://cdn.nova/community/post-2.jpg",
-                List.of("https://cdn.nova/community/post-2.jpg", "https://cdn.nova/community/post-2b.jpg"),
-                "https://cdn.nova/community/post-2-thumb.jpg",
-                List.of("photography", "travel", "goldenhour"),
-                List.of(),
-                List.of("u-seraphina"),
-                List.of("u-current"),
-                List.of(),
-                4,
-                Instant.now().minusSeconds(3600)
-        ));
-        seedPost(new CommunityPostState(
-                "cpost-3",
-                "topic-travel",
-                "u-mina",
-                "VIDEO",
-                "Bali routes for a 3-day trip?",
-                "https://www.w3schools.com/html/mov_bbb.mp4",
-                List.of("https://www.w3schools.com/html/mov_bbb.mp4"),
-                "https://cdn.nova/community/post-3-thumb.jpg",
-                List.of("travel", "weekend", "bali"),
-                List.of("u-seraphina"),
-                List.of(),
-                List.of(),
-                List.of(),
-                1,
-                Instant.now().minusSeconds(7200)
-        ));
-        seedPost(new CommunityPostState(
-                "cpost-4",
-                "topic-photo",
-                "u-elena",
-                "MIXED",
-                "One reel, two stills, same trip.",
-                "https://cdn.nova/community/post-4.jpg",
-                List.of(
-                        "https://cdn.nova/community/post-4.jpg",
-                        "https://www.w3schools.com/html/mov_bbb.mp4",
-                        "https://cdn.nova/community/post-4b.jpg"
-                ),
-                "https://cdn.nova/community/post-4-thumb.jpg",
-                List.of("mixed", "travel", "story"),
-                List.of(),
-                List.of("u-current"),
-                List.of(),
-                List.of(),
-                6,
-                Instant.now().minusSeconds(5400)
-        ));
-
-        events.put("event-design-night", new EventState("event-design-night", "Design Night", "Live", "Fri 8 PM", "Berlin", "$12", "https://cdn.nova/events/design-night.jpg", "248 going", false));
-        events.put("event-photo-walk", new EventState("event-photo-walk", "Photo Walk", "Offline", "Sat 7 AM", "Barcelona", "Free", "https://cdn.nova/events/photo-walk.jpg", "126 going", true));
-        events.put("event-community-qna", new EventState("event-community-qna", "Community Q&A", "Online", "Tonight", "Zoom", "Free", "https://cdn.nova/events/community-qna.jpg", "524 going", false));
-
-        tagHotness.put("product", 42);
-        tagHotness.put("compose", 55);
-        tagHotness.put("ux", 38);
-        tagHotness.put("photography", 76);
-        tagHotness.put("travel", 88);
-        tagHotness.put("goldenhour", 29);
-        tagHotness.put("weekend", 51);
-        tagHotness.put("bali", 24);
-    }
-
-    private void seedPost(CommunityPostState post) {
-        posts.put(post.id(), post);
-    }
-
     private void loadPersistedState() {
         moduleStateStore.load("community", CommunityState.class).ifPresentOrElse(state -> {
             topics.clear();
@@ -420,6 +334,9 @@ public class CommunityService {
             postSequence.set(Math.max(1, state.postSequence()));
             commentSequence.set(Math.max(1, state.commentSequence()));
             refreshSequence.set(Math.max(1, state.refreshSequence()));
+            if (removeLegacyDemoState()) {
+                persistState();
+            }
         }, this::persistState);
     }
 
@@ -435,12 +352,49 @@ public class CommunityService {
         ));
     }
 
+    private boolean removeLegacyDemoState() {
+        boolean removed = false;
+        removed = posts.keySet().removeIf(LEGACY_DEMO_POST_IDS::contains) || removed;
+        removed = events.keySet().removeIf(LEGACY_DEMO_EVENT_IDS::contains) || removed;
+        removed = topics.keySet().removeIf(topicId ->
+                LEGACY_DEMO_TOPIC_IDS.contains(topicId)
+                        && posts.values().stream().noneMatch(post -> Objects.equals(post.topicId(), topicId))
+        ) || removed;
+        removed = tagHotness.keySet().removeIf(LEGACY_DEMO_TAGS::contains) || removed;
+        return removed;
+    }
+
     private CommunityTopicState requireTopic(String topicId) {
         CommunityTopicState topic = topics.get(topicId);
         if (topic == null) {
             throw new NotFoundException("Topic not found");
         }
         return topic;
+    }
+
+    private CommunityTopicState resolveTopicForPost(String topicId) {
+        String requestedTopicId = topicId == null || topicId.isBlank() ? DEFAULT_TOPIC_ID : topicId.trim();
+        CommunityTopicState existing = topics.get(requestedTopicId);
+        if (existing != null) {
+            return existing;
+        }
+
+        if (topics.isEmpty() || "travel".equalsIgnoreCase(requestedTopicId) || DEFAULT_TOPIC_ID.equalsIgnoreCase(requestedTopicId)) {
+            CommunityTopicState created = new CommunityTopicState(
+                    DEFAULT_TOPIC_ID,
+                    "General",
+                    "",
+                    "",
+                    "0 members",
+                    "",
+                    0,
+                    true
+            );
+            topics.put(DEFAULT_TOPIC_ID, created);
+            return created;
+        }
+
+        throw new NotFoundException("Topic not found");
     }
 
     private CommunityPostState requirePost(String postId) {

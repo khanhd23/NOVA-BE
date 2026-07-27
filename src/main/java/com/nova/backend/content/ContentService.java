@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -29,6 +30,15 @@ import java.util.stream.Collectors;
 public class ContentService {
 
     private static final long MAX_VIDEO_BYTES = 50L * 1024L * 1024L;
+    private static final Set<String> LEGACY_DEMO_USER_IDS = Set.of(
+            "u-current",
+            "u-seraphina",
+            "u-elena",
+            "u-marcus",
+            "u-chloe",
+            "u-alex",
+            "u-mina"
+    );
 
     private final AccountService accountService;
     private final SocialService socialService;
@@ -36,7 +46,6 @@ public class ContentService {
     private final StorageProperties storageProperties;
     private final List<StoryItem> stories = new ArrayList<>();
     private final List<FeedPostResponse> feedPosts = new ArrayList<>();
-    private final List<DiscoveryCandidate> candidates = new ArrayList<>();
     private final Map<String, List<MediaAssetResponse>> mediaByOwner = new ConcurrentHashMap<>();
     private final AtomicInteger mediaSequence = new AtomicInteger(1);
 
@@ -46,7 +55,6 @@ public class ContentService {
         this.moduleStateStore = moduleStateStore;
         this.storageProperties = storageProperties;
         ensureUploadDirectory();
-        seed();
         loadPersistedState();
     }
 
@@ -179,130 +187,14 @@ public class ContentService {
         return asset;
     }
 
-    private void seed() {
-        var seraphina = accountService.getPublicProfile("u-seraphina");
-        var elena = accountService.getPublicProfile("u-elena");
-        var marcus = accountService.getPublicProfile("u-marcus");
-        var chloe = accountService.getPublicProfile("u-chloe");
-        var alex = accountService.getPublicProfile("u-alex");
-        var mina = accountService.getPublicProfile("u-mina");
-
-        stories.add(new StoryItem("story_1", seraphina, "https://cdn.nova/story/story-1.jpg", "Late coffee and design review", "Cinematic", false, 8));
-        stories.add(new StoryItem("story_2", chloe, "https://cdn.nova/story/story-2.jpg", "Weekend travel plans", "Indie pop", false, 7));
-        stories.add(new StoryItem("story_3", elena, "https://cdn.nova/story/story-3.jpg", "Community meetup tonight", "Synth wave", true, 6));
-
-        feedPosts.add(new FeedPostResponse(
-                "post_1",
-                seraphina,
-                "Found a cleaner way to ship call UI without turning the viewmodel into a mess.",
-                List.of("https://cdn.nova/post/post-1.jpg"),
-                482,
-                36,
-                19,
-                List.of("Android", "Compose", "Product"),
-                "12m ago"
-        ));
-        feedPosts.add(new FeedPostResponse(
-                "post_2",
-                alex,
-                "Testing a new message thread layout today.",
-                List.of("https://cdn.nova/post/post-2.jpg"),
-                214,
-                18,
-                11,
-                List.of("UI", "Testing"),
-                "38m ago"
-        ));
-        feedPosts.add(new FeedPostResponse(
-                "post_3",
-                mina,
-                "Trying a photo walk tomorrow if anyone wants to join.",
-                List.of("https://cdn.nova/post/post-3.jpg"),
-                632,
-                41,
-                25,
-                List.of("Travel", "Photography"),
-                "2h ago"
-        ));
-
-        candidates.add(new DiscoveryCandidate(
-                "u-elena",
-                elena,
-                "Community builder who loves clean product flows.",
-                96,
-                List.of("Product", "Messaging", "Events"),
-                "Ask her about the best onboarding flow she has seen.",
-                12,
-                "Indie electronic",
-                "168 cm",
-                "PM",
-                "Serious",
-                List.of("https://cdn.nova/discover/elena-1.jpg", "https://cdn.nova/discover/elena-2.jpg"),
-                true,
-                true
-        ));
-        candidates.add(new DiscoveryCandidate(
-                "u-chloe",
-                chloe,
-                "Photographer, traveler, and always on the move.",
-                92,
-                List.of("Travel", "Photography", "Coffee"),
-                "Ask her to pick her favorite city for a weekend trip.",
-                9,
-                "Lo-fi",
-                "171 cm",
-                "Creator",
-                "Open",
-                List.of("https://cdn.nova/discover/chloe-1.jpg", "https://cdn.nova/discover/chloe-2.jpg"),
-                true,
-                true
-        ));
-        candidates.add(new DiscoveryCandidate(
-                "u-marcus",
-                marcus,
-                "Product engineer and a heavy user of dark mode.",
-                87,
-                List.of("Android", "Build systems", "Coffee"),
-                "Ask him what he would rewrite first in a large app.",
-                5,
-                "House",
-                "180 cm",
-                "Engineer",
-                "Long term",
-                List.of("https://cdn.nova/discover/marcus-1.jpg"),
-                true,
-                false
-        ));
-        candidates.add(new DiscoveryCandidate(
-                "u-mina",
-                mina,
-                "Community-focused and likes active weekends.",
-                84,
-                List.of("Running", "Community", "Travel"),
-                "Ask her which city has the best running routes.",
-                8,
-                "Pop",
-                "165 cm",
-                "Community lead",
-                "Dating",
-                List.of("https://cdn.nova/discover/mina-1.jpg"),
-                true,
-                true
-        ));
-
-        mediaByOwner.put("u-seraphina", List.of(
-                new MediaAssetResponse("media-1", "u-seraphina", "Call UI mock", "https://cdn.nova/media/mock-call-ui.jpg", "image/jpeg", "image", null, "2026-07-07T10:00:00Z", false)
-        ));
-        mediaByOwner.put("u-chloe", List.of(
-                new MediaAssetResponse("media-2", "u-chloe", "Travel reel", "https://cdn.nova/media/travel-reel.mp4", "video/mp4", "video", "https://cdn.nova/media/travel-reel-thumb.jpg", "2026-07-07T11:00:00Z", true)
-        ));
-    }
-
     private void loadPersistedState() {
         moduleStateStore.load("content", ContentState.class).ifPresentOrElse(state -> {
             mediaByOwner.clear();
             mediaByOwner.putAll(state.mediaByOwner() == null ? Map.of() : state.mediaByOwner());
             mediaSequence.set(Math.max(1, state.mediaSequence()));
+            if (mediaByOwner.keySet().removeIf(LEGACY_DEMO_USER_IDS::contains)) {
+                persistState();
+            }
         }, () -> persistState());
     }
 

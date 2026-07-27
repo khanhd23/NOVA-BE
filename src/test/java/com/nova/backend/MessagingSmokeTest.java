@@ -2,6 +2,9 @@ package com.nova.backend;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nova.backend.account.AccountService;
+import com.nova.backend.auth.SocialIdentity;
+import com.nova.backend.auth.SocialProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +28,9 @@ class MessagingSmokeTest {
     @Autowired
     private WebApplicationContext webApplicationContext;
 
+    @Autowired
+    private AccountService accountService;
+
     private MockMvc mockMvc;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -37,14 +43,34 @@ class MessagingSmokeTest {
     void deleteConversationAndRecallMessageWork() throws Exception {
         String loginResponse = login();
         String accessToken = extractAccessToken(loginResponse);
+        String peerUserId = createPeerUser();
+
+        String callResponse = mockMvc.perform(post("/api/v1/threads/new-direct-thread/calls")
+                        .header("Authorization", "Bearer " + accessToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "callType": "VOICE",
+                                  "direction": "OUTGOING",
+                                  "peerUserId": "%s"
+                                }
+                                """.formatted(peerUserId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String threadId = objectMapper.readTree(callResponse).path("data").path("threadId").asText();
+        assertThat(threadId).isNotBlank();
 
         mockMvc.perform(get("/api/v1/threads")
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.length()").value(4));
+                .andExpect(jsonPath("$.data[?(@.id=='%s')]".formatted(threadId)).exists());
 
-        mockMvc.perform(delete("/api/v1/threads/thread-marcus")
+        mockMvc.perform(delete("/api/v1/threads/" + threadId)
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
@@ -53,10 +79,9 @@ class MessagingSmokeTest {
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.length()").value(3))
-                .andExpect(jsonPath("$.data[?(@.id=='thread-marcus')]").isEmpty());
+                .andExpect(jsonPath("$.data[?(@.id=='%s')]".formatted(threadId)).isEmpty());
 
-        String sendResponse = mockMvc.perform(post("/api/v1/threads/thread-elena/messages")
+        String sendResponse = mockMvc.perform(post("/api/v1/threads/" + threadId + "/messages")
                         .header("Authorization", "Bearer " + accessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -74,24 +99,24 @@ class MessagingSmokeTest {
         String messageId = sendJson.path("data").path("id").asText();
         assertThat(messageId).isNotBlank();
 
-        mockMvc.perform(post("/api/v1/threads/thread-elena/messages/" + messageId + "/recall")
+        mockMvc.perform(post("/api/v1/threads/" + threadId + "/messages/" + messageId + "/recall")
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.status").value("RECALLED"))
                 .andExpect(jsonPath("$.data.text").value("You unsent a message"));
 
-        mockMvc.perform(get("/api/v1/threads/thread-elena")
+        mockMvc.perform(get("/api/v1/threads/" + threadId)
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.messages[?(@.status=='RECALLED')]").exists());
 
-        mockMvc.perform(post("/api/v1/threads/thread-elena/read")
+        mockMvc.perform(post("/api/v1/threads/" + threadId + "/read")
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.thread.id").value("thread-elena"));
+                .andExpect(jsonPath("$.data.thread.id").value(threadId));
     }
 
     private String login() throws Exception {
@@ -119,5 +144,15 @@ class MessagingSmokeTest {
         String accessToken = loginJson.path("data").path("tokens").path("accessToken").asText();
         assertThat(accessToken).isNotBlank();
         return accessToken;
+    }
+
+    private String createPeerUser() {
+        return accountService.upsertSocialUser(new SocialIdentity(
+                SocialProvider.GOOGLE,
+                "test:messaging-peer",
+                "messaging-peer@nova.test",
+                "Messaging Peer",
+                ""
+        ));
     }
 }

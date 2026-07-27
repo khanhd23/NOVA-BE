@@ -22,6 +22,7 @@ import java.security.GeneralSecurityException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -31,6 +32,15 @@ public class AuthService {
     private static final Duration ACCESS_TTL = Duration.ofHours(6);
     private static final Duration REFRESH_TTL = Duration.ofDays(30);
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
+    private static final Set<String> LEGACY_DEMO_USER_IDS = Set.of(
+            "u-current",
+            "u-seraphina",
+            "u-elena",
+            "u-marcus",
+            "u-chloe",
+            "u-alex",
+            "u-mina"
+    );
 
     private final AccountService accountService;
     private final AuthProperties authProperties;
@@ -208,6 +218,9 @@ public class AuthService {
             List<SessionRecord> persisted = jdbcTemplate.query("SELECT * FROM auth_sessions", (rs, rowNum) -> rowToSession(rs));
             Instant now = Instant.now();
             for (SessionRecord record : persisted) {
+                if (LEGACY_DEMO_USER_IDS.contains(record.userId())) {
+                    continue;
+                }
                 if (record.active() && record.expiresAt().isAfter(now) && record.refreshExpiresAt().isAfter(now)) {
                     sessionsByRefreshToken.put(record.refreshToken(), record);
                     accessTokenToRefreshToken.put(record.accessToken(), record.refreshToken());
@@ -328,35 +341,11 @@ public class AuthService {
     private void seedDevIdentities() {
         devIdentities.put(
                 "GOOGLE:dev:current",
-                new SocialIdentity(SocialProvider.GOOGLE, "dev:current", "you@nova.app", "Nova User", "https://cdn.nova/avatar/current.jpg")
-        );
-        devIdentities.put(
-                "GOOGLE:dev:seraphina",
-                new SocialIdentity(SocialProvider.GOOGLE, "dev:seraphina", "seraphina@nova.app", "Seraphina Vale", "https://cdn.nova/avatar/seraphina.jpg")
+                new SocialIdentity(SocialProvider.GOOGLE, "dev:current", "you@nova.app", "Nova User", "")
         );
         devIdentities.put(
                 "FACEBOOK:dev:current",
-                new SocialIdentity(SocialProvider.FACEBOOK, "dev:current", "you@nova.app", "Nova User", "https://cdn.nova/avatar/current-fb.jpg")
-        );
-        devIdentities.put(
-                "FACEBOOK:dev:elena",
-                new SocialIdentity(SocialProvider.FACEBOOK, "dev:elena", "elena@nova.app", "Elena Markov", "https://cdn.nova/avatar/elena.jpg")
-        );
-        devIdentities.put(
-                "GOOGLE:dev:marcus",
-                new SocialIdentity(SocialProvider.GOOGLE, "dev:marcus", "marcus@nova.app", "Marcus Reed", "https://cdn.nova/avatar/marcus.jpg")
-        );
-        devIdentities.put(
-                "FACEBOOK:dev:chloe",
-                new SocialIdentity(SocialProvider.FACEBOOK, "dev:chloe", "chloe@nova.app", "Chloe Rivera", "https://cdn.nova/avatar/chloe.jpg")
-        );
-        devIdentities.put(
-                "GOOGLE:dev:alex",
-                new SocialIdentity(SocialProvider.GOOGLE, "dev:alex", "alex@nova.app", "Alex Johnson", "https://cdn.nova/avatar/alex.jpg")
-        );
-        devIdentities.put(
-                "GOOGLE:dev:mina",
-                new SocialIdentity(SocialProvider.GOOGLE, "dev:mina", "mina@nova.app", "Mina Park", "https://cdn.nova/avatar/mina.jpg")
+                new SocialIdentity(SocialProvider.FACEBOOK, "dev:current", "you@nova.app", "Nova User", "")
         );
     }
 

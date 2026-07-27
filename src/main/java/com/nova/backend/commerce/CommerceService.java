@@ -430,7 +430,11 @@ public class CommerceService {
     }
 
     private String formatAmount(long amount, String currency) {
-        return amount + " " + currency;
+        String formatted = String.format(Locale.US, "%,d", amount);
+        if ("DIAMONDS".equalsIgnoreCase(currency)) {
+            return formatted + " Diamonds";
+        }
+        return formatted + " " + currency;
     }
 
     private void seedCatalog() {
