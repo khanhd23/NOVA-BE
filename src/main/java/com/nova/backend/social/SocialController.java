@@ -175,4 +175,9 @@ public class SocialController {
     ) {
         return ApiResponse.ok(socialService.markRead(principal.userId(), request.notificationId()));
     }
+
+    @PostMapping("/notifications/read-all")
+    public ApiResponse<?> readAllNotifications(@AuthenticationPrincipal AuthPrincipal principal) {
+        return ApiResponse.ok(socialService.markAllRead(principal.userId()));
+    }
 }

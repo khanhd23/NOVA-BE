@@ -106,7 +106,7 @@ public class SocialService {
     }
 
     public ThreadDetailResponse thread(String userId, String threadId, int limit, String before) {
-        ThreadRecord thread = requireThread(threadId);
+        ThreadRecord thread = resolveThreadForOpen(userId, threadId);
         if (!thread.participantIds().contains(userId)) {
             throw new NotFoundException("Thread not found");
         }
@@ -143,7 +143,7 @@ public class SocialService {
     }
 
     public ChatMessageResponse sendMessage(String userId, String threadId, SendMessageRequest request) {
-        ThreadRecord thread = requireThread(threadId);
+        ThreadRecord thread = resolveThreadForOpen(userId, threadId);
         if (!thread.participantIds().contains(userId)) {
             throw new NotFoundException("Thread not found");
         }
@@ -166,7 +166,7 @@ public class SocialService {
         Instant createdAt = Instant.now();
         MessageRecord message = new MessageRecord(
                 "msg-" + messageSequence.getAndIncrement(),
-                threadId,
+                thread.id(),
                 userId,
                 request.text() == null ? "" : request.text(),
                 attachmentKind == MessageKind.AUDIO,
@@ -678,6 +678,8 @@ public class SocialService {
     public List<NotificationResponse> notifications(String userId) {
         return notifications.stream()
                 .filter(notification -> notification.recipientUserId() == null || Objects.equals(notification.recipientUserId(), userId))
+                .filter(notification -> notification.kind() != NotificationKind.MESSAGE && notification.kind() != NotificationKind.CALL)
+                .sorted(Comparator.comparingInt((NotificationResponse notification) -> notificationSequenceValue(notification.id())).reversed())
                 .toList();
     }
 
@@ -749,6 +751,33 @@ public class SocialService {
             }
         }
         throw new NotFoundException("Notification not found");
+    }
+
+    public List<NotificationResponse> markAllRead(String userId) {
+        for (int i = 0; i < notifications.size(); i++) {
+            NotificationResponse notification = notifications.get(i);
+            if (notification.kind() == NotificationKind.MESSAGE || notification.kind() == NotificationKind.CALL) {
+                continue;
+            }
+            if (notification.recipientUserId() != null && !Objects.equals(notification.recipientUserId(), userId)) {
+                continue;
+            }
+            if (!notification.read()) {
+                notifications.set(i, new NotificationResponse(
+                        notification.id(),
+                        notification.kind(),
+                        notification.recipientUserId(),
+                        notification.threadId(),
+                        notification.title(),
+                        notification.body(),
+                        notification.timeLabel(),
+                        true,
+                        notification.actionTarget()
+                ));
+            }
+        }
+        persistState();
+        return notifications(userId);
     }
 
     private void publishToThread(
@@ -1234,6 +1263,40 @@ public class SocialService {
                 .orElseGet(() -> createDirectThread(userId, peer, peerProfile));
     }
 
+    private ThreadRecord resolveThreadForOpen(String userId, String threadId) {
+        ThreadRecord existing = threads.get(threadId);
+        if (existing != null) {
+            ensureParticipant(existing, userId);
+            return existing;
+        }
+
+        String peerUserId = directThreadAliasPeer(threadId);
+        if (peerUserId.isBlank() || Objects.equals(peerUserId, userId)) {
+            throw new NotFoundException("Thread not found");
+        }
+        PublicUserCard peerProfile = accountService.getPublicProfile(peerUserId);
+        return threads.values().stream()
+                .filter(thread -> thread.type() == ThreadType.DIRECT)
+                .filter(thread -> thread.participantIds().contains(userId))
+                .filter(thread -> thread.participantIds().contains(peerUserId))
+                .findFirst()
+                .orElseGet(() -> createDirectThread(userId, peerUserId, peerProfile));
+    }
+
+    private String directThreadAliasPeer(String threadId) {
+        if (threadId == null || threadId.isBlank()) {
+            return "";
+        }
+        String trimmed = threadId.trim();
+        if (trimmed.startsWith("dm-")) {
+            return trimmed.substring(3);
+        }
+        if (trimmed.startsWith("direct-")) {
+            return trimmed.substring(7);
+        }
+        return "";
+    }
+
     private ThreadRecord createDirectThread(String userId, String peerUserId, PublicUserCard peerProfile) {
         ThreadRecord thread = new ThreadRecord(
                 "thread-" + UUID.randomUUID(),
@@ -1259,6 +1322,21 @@ public class SocialService {
             throw new NotFoundException("Thread not found");
         }
         return thread;
+    }
+
+    private int notificationSequenceValue(String notificationId) {
+        if (notificationId == null) {
+            return 0;
+        }
+        int dash = notificationId.lastIndexOf('-');
+        if (dash < 0 || dash == notificationId.length() - 1) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(notificationId.substring(dash + 1));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private CallRecord requireCall(String callId) {

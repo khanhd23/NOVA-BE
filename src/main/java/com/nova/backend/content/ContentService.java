@@ -101,6 +101,18 @@ public class ContentService {
         }
         boolean matched = "right".equalsIgnoreCase(request.direction()) && candidate.compatibility() >= 78;
         String message = matched ? "It's a match" : "Swiped " + request.direction();
+        if ("right".equalsIgnoreCase(request.direction())) {
+            var actor = accountService.getPublicProfile(userId);
+            String actorName = actor.displayName() == null || actor.displayName().isBlank() ? "Someone" : actor.displayName();
+            socialService.publishRelationNotification(
+                    candidate.user().userId(),
+                    userId,
+                    "PROFILE_LIKE",
+                    "New profile like",
+                    actorName + " liked your profile",
+                    "profile/" + userId
+            );
+        }
         String nextCandidateId = nextCandidateId(candidate.candidateId());
         return new SwipeResponse(matched, message, nextCandidateId);
     }
@@ -120,7 +132,7 @@ public class ContentService {
                 actorName + " poked you",
                 "profile/" + userId
         );
-        return new PokeResponse(true, "Poke sent", nextCandidateId(candidate.candidateId()));
+        return new PokeResponse(true, "Poke sent", null);
     }
 
     public MediaLibraryResponse mediaLibrary(String userId) {

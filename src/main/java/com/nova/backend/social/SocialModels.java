@@ -59,6 +59,7 @@ enum NotificationKind {
     FOLLOW,
     FRIEND,
     POKE,
+    PROFILE_LIKE,
     COMMUNITY,
     EVENT,
     SYSTEM
