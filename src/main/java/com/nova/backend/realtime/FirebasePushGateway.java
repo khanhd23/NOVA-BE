@@ -19,6 +19,7 @@ import java.util.Map;
 public class FirebasePushGateway implements PushGateway {
 
     private static final Logger log = LoggerFactory.getLogger(FirebasePushGateway.class);
+    private static final long CALL_RING_TTL_MS = 30_000L;
 
     private final boolean enabled;
 
@@ -59,14 +60,22 @@ public class FirebasePushGateway implements PushGateway {
                 Message firebaseMessage = Message.builder()
                         .setToken(token)
                         .putAllData(message.data() == null ? Map.of() : message.data())
-                        .setAndroidConfig(AndroidConfig.builder()
-                                .setPriority(AndroidConfig.Priority.HIGH)
-                                .build())
+                        .setAndroidConfig(androidConfig(message))
                         .build();
                 FirebaseMessaging.getInstance().send(firebaseMessage);
             } catch (Exception ex) {
                 log.warn("Failed to send FCM push to token {}: {}", token, ex.getMessage());
             }
         }
+    }
+
+    /** Ringing pushes are useless once the call has timed out, so don't deliver them late. */
+    private static AndroidConfig androidConfig(PushMessage message) {
+        AndroidConfig.Builder builder = AndroidConfig.builder().setPriority(AndroidConfig.Priority.HIGH);
+        String type = message.data() == null ? null : message.data().get("type");
+        if ("CALL_STARTED".equalsIgnoreCase(type)) {
+            builder.setTtl(CALL_RING_TTL_MS);
+        }
+        return builder.build();
     }
 }

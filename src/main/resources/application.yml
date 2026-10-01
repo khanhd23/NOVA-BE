@@ -32,6 +32,8 @@ webrtc:
   turn-servers: ${NOVA_WEBRTC_TURN_SERVERS:}
   turn-username: ${NOVA_WEBRTC_TURN_USERNAME:}
   turn-credential: ${NOVA_WEBRTC_TURN_CREDENTIAL:}
+  turn-secret: ${NOVA_WEBRTC_TURN_SECRET:}
+  turn-credential-ttl-seconds: ${NOVA_WEBRTC_TURN_TTL_SECONDS:86400}
   max-restart-attempts: ${NOVA_WEBRTC_MAX_RESTART_ATTEMPTS:2}
   restart-backoff-ms: ${NOVA_WEBRTC_RESTART_BACKOFF_MS:1000}
 
@@ -43,3 +45,7 @@ management:
     web:
       exposure:
         include: health,info
+
+commerce:
+  # Shared secret for payment gateway webhooks (HMAC-SHA256). Empty = webhooks rejected.
+  webhook-secret: ${NOVA_PAYMENT_WEBHOOK_SECRET:}

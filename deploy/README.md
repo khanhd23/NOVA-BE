@@ -8,6 +8,7 @@ Assume the repository is checked out at `/opt/NOVA-BE`.
 
 - `systemd/nova-backend.service` - systemd unit that runs the packaged jar.
 - `nginx/nova-backend.conf` - reverse proxy config with WebSocket support and upload limits.
+- `coturn/turnserver.conf`, `coturn/setup-turn.sh` - TURN relay for voice/video calls.
 
 ## Quick setup
 
@@ -36,6 +37,32 @@ sudo ln -s /etc/nginx/sites-available/nova-backend.conf /etc/nginx/sites-enabled
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+## TURN server for calls (coturn)
+
+Without TURN, calls fail for users behind strict NATs (many 4G networks, office Wi-Fi). coturn relays the media in those cases. It can run on the same VPS as the backend.
+
+1. Install and configure coturn (Ubuntu/Debian):
+
+```bash
+sudo bash deploy/coturn/setup-turn.sh
+```
+
+The script detects the public IP, generates a shared secret, writes `/etc/turnserver.conf` from `deploy/coturn/turnserver.conf`, opens the ports in `ufw` if it is active, and prints the lines to add to `.env`.
+
+1. Add the printed `NOVA_WEBRTC_TURN_SERVERS` and `NOVA_WEBRTC_TURN_SECRET` to `.env` and restart the backend:
+
+```bash
+sudo systemctl restart nova-backend
+```
+
+1. Open these ports in the cloud provider firewall (security group) as well: `3478/udp`, `3478/tcp`, `49152-65535/udp`.
+
+1. Check that the backend returns the TURN server: `GET /api/v1/realtime/config` (with a logged-in token) should list a `turn:` URL with a `username` like `1767225600:u-12` and a `credential`.
+
+To test the relay itself, open https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/, enter the `turn:` URL with that username and credential, and click "Gather candidates". A candidate of type `relay` means TURN works.
+
+The backend signs short-lived credentials (`NOVA_WEBRTC_TURN_TTL_SECONDS`, default 24 hours) with the shared secret, so no password is baked into the app. The app fetches fresh credentials before every call.
 
 ## Notes
 

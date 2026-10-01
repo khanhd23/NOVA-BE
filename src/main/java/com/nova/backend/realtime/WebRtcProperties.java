@@ -11,9 +11,16 @@ public record WebRtcProperties(
         String turnServers,
         String turnUsername,
         String turnCredential,
+        String turnSecret,
+        long turnCredentialTtlSeconds,
         int maxRestartAttempts,
         long restartBackoffMs
 ) {
+    /** coturn "use-auth-secret" mode: per-user, time-limited credentials instead of a shared password. */
+    public boolean usesTurnSecret() {
+        return turnSecret != null && !turnSecret.isBlank();
+    }
+
     public List<String> parsedIceServers() {
         return parsedList(iceServers);
     }
