@@ -19,9 +19,11 @@ import java.util.Locale;
 public class CommerceController {
 
     private final CommerceService commerceService;
+    private final WebhookSignatureVerifier webhookSignatureVerifier;
 
-    public CommerceController(CommerceService commerceService) {
+    public CommerceController(CommerceService commerceService, WebhookSignatureVerifier webhookSignatureVerifier) {
         this.commerceService = commerceService;
+        this.webhookSignatureVerifier = webhookSignatureVerifier;
     }
 
     @GetMapping("/catalog")
@@ -82,6 +84,7 @@ public class CommerceController {
             @PathVariable String provider,
             @RequestBody PaymentWebhookRequest request
     ) {
+        webhookSignatureVerifier.verify(request);
         return ApiResponse.ok(commerceService.webhook(parseProvider(provider), request));
     }
 
