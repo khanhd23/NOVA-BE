@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -29,7 +30,6 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class AccountService {
@@ -51,6 +51,7 @@ public class AccountService {
     private final SocialService socialService;
     private final List<PremiumPlanResponse> premiumPlans;
     private final AtomicInteger userSequence = new AtomicInteger(100);
+    private final SecureRandom publicIdRandom = new SecureRandom();
     private static final long PUBLIC_ID_MIN = 100_000_000L;
     private static final long PUBLIC_ID_MAX = 999_999_999L;
     private static final String DEFAULT_NEW_USER_BIO = "I'm new here.";
@@ -73,7 +74,6 @@ public class AccountService {
             "GOOGLE:dev:alex",
             "GOOGLE:dev:mina"
     );
-    private final AtomicLong publicIdSequence = new AtomicLong(PUBLIC_ID_MIN);
 
     public AccountService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper, @Lazy SocialService socialService) {
         this.jdbcTemplate = jdbcTemplate;
@@ -150,7 +150,6 @@ public class AccountService {
         removeLegacyDemoAccountsFromMemory();
         ensurePublicIds();
         refreshUserSequence();
-        refreshPublicIdSequence();
     }
 
     public synchronized String upsertSocialUser(SocialIdentity identity) {
@@ -484,18 +483,6 @@ public class AccountService {
         userSequence.set(Math.max(100, maxSequence + 1));
     }
 
-    private void refreshPublicIdSequence() {
-        long maxSequence = accounts.values().stream()
-                .map(AccountRecord::publicId)
-                .map(this::extractNumericPublicId)
-                .filter(Objects::nonNull)
-                .mapToLong(Long::longValue)
-                .max()
-                .orElse(PUBLIC_ID_MIN - 1);
-        long next = maxSequence >= PUBLIC_ID_MAX ? PUBLIC_ID_MIN : Math.max(PUBLIC_ID_MIN, maxSequence + 1);
-        publicIdSequence.set(next);
-    }
-
     private Integer extractNumericUserId(String userId) {
         if (userId == null || !userId.startsWith("u-")) {
             return null;
@@ -507,27 +494,10 @@ public class AccountService {
         }
     }
 
-    private Long extractNumericPublicId(String publicId) {
-        if (!isValidPublicId(publicId)) {
-            return null;
-        }
-        try {
-            return Long.parseLong(publicId);
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-
     private String generatePublicId() {
-        long attempts = PUBLIC_ID_MAX - PUBLIC_ID_MIN + 1;
-        for (long index = 0; index < attempts; index++) {
-            long candidateValue = publicIdSequence.getAndUpdate(value ->
-                    value >= PUBLIC_ID_MAX ? PUBLIC_ID_MIN : value + 1
-            );
-            if (candidateValue < PUBLIC_ID_MIN || candidateValue > PUBLIC_ID_MAX) {
-                candidateValue = PUBLIC_ID_MIN;
-            }
-            String candidate = Long.toString(candidateValue);
+        int range = (int) (PUBLIC_ID_MAX - PUBLIC_ID_MIN + 1);
+        for (int index = 0; index < 10_000; index++) {
+            String candidate = Long.toString(PUBLIC_ID_MIN + publicIdRandom.nextInt(range));
             if (!userIdByPublicId.containsKey(candidate)) {
                 return candidate;
             }
