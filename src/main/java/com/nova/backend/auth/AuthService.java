@@ -81,6 +81,12 @@ public class AuthService {
         if (existing == null || !existing.active()) {
             throw new UnauthorizedException("Refresh token is invalid or expired");
         }
+        if (!existing.refreshExpiresAt().isAfter(Instant.now())) {
+            deleteSession(existing);
+            sessionsByRefreshToken.remove(existing.refreshToken());
+            accessTokenToRefreshToken.remove(existing.accessToken());
+            throw new UnauthorizedException("Refresh token is invalid or expired");
+        }
         SessionRecord rotated = existing.rotate();
         deleteSession(existing);
         sessionsByRefreshToken.remove(existing.refreshToken());
@@ -121,7 +127,8 @@ public class AuthService {
 
     public AuthPrincipal resolvePrincipal(String accessToken) {
         SessionRecord session = findByAccessToken(accessToken);
-        if (session == null || !session.active()) {
+        // Expired access tokens are rejected (401) so the client refreshes them.
+        if (session == null || !session.active() || !session.expiresAt().isAfter(Instant.now())) {
             return null;
         }
         MeResponse me = accountService.getMe(session.userId());
@@ -221,7 +228,9 @@ public class AuthService {
                 if (LEGACY_DEMO_USER_IDS.contains(record.userId())) {
                     continue;
                 }
-                if (record.active() && record.expiresAt().isAfter(now) && record.refreshExpiresAt().isAfter(now)) {
+                // Keep sessions whose refresh token is still valid, even if the access token expired:
+                // the client refreshes it instead of being logged out after a server restart.
+                if (record.active() && record.refreshExpiresAt().isAfter(now)) {
                     sessionsByRefreshToken.put(record.refreshToken(), record);
                     accessTokenToRefreshToken.put(record.accessToken(), record.refreshToken());
                 }
