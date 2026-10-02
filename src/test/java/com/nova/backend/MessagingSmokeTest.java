@@ -64,6 +64,13 @@ class MessagingSmokeTest {
         String threadId = objectMapper.readTree(callResponse).path("data").path("threadId").asText();
         assertThat(threadId).isNotBlank();
 
+        // Conversations are listed only once they have a message.
+        mockMvc.perform(post("/api/v1/threads/" + threadId + "/messages")
+                        .header("Authorization", "Bearer " + accessToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"text\": \"Hello\"}"))
+                .andExpect(status().isOk());
+
         mockMvc.perform(get("/api/v1/threads")
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())

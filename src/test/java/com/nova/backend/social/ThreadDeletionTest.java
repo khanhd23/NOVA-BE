@@ -67,6 +67,25 @@ class ThreadDeletionTest {
         assertThat(peerTexts(peerId, threadId)).contains("first message", "second message");
     }
 
+    @Test
+    void openingAChatWithoutMessagesDoesNotListIt() throws Exception {
+        String token = loginAccessToken();
+        String peerId = accountService.upsertSocialUser(new SocialIdentity(
+                SocialProvider.GOOGLE, "test:empty-peer", "empty-peer@nova.test", "Empty Peer", ""));
+
+        // Opening the direct chat creates the thread record but no content.
+        mockMvc.perform(get("/api/v1/threads/dm-" + peerId).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+        String threadId = socialService.threads(peerId).stream()
+                .map(ChatThreadResponse::id)
+                .findFirst()
+                .orElse(null);
+
+        assertThat(threadId).as("peer must not see an empty conversation").isNull();
+        mockMvc.perform(get("/api/v1/threads").header("Authorization", "Bearer " + token))
+                .andExpect(jsonPath("$.data[?(@.participant.userId=='%s')]".formatted(peerId)).doesNotExist());
+    }
+
     private String loginAccessToken() throws Exception {
         String response = mockMvc.perform(post("/api/v1/auth/social/login")
                         .contentType(MediaType.APPLICATION_JSON)

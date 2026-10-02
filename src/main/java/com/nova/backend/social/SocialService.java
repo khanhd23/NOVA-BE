@@ -73,6 +73,9 @@ public class SocialService {
         return threads.values().stream()
                 .filter(thread -> thread.participantIds().contains(userId))
                 .filter(thread -> !thread.hiddenForUserIds().contains(userId))
+                // A conversation is listed only once it has content this user can see:
+                // opening a chat without sending anything must not create an empty entry.
+                .filter(thread -> thread.messages().stream().anyMatch(message -> isMessageVisibleToUser(message, userId)))
                 .map(thread -> toThreadResponse(thread, userId))
                 .sorted(Comparator.comparing(ChatThreadResponse::updatedAt).reversed())
                 .toList();
