@@ -1,5 +1,9 @@
 package com.nova.backend.realtime;
 
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.web.socket.adapter.NativeWebSocketSession;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nova.backend.account.AccountService;
@@ -19,6 +23,8 @@ import java.util.UUID;
 @Component
 public class RealtimeWebSocketHandler extends TextWebSocketHandler {
 
+    private static final long IDLE_TIMEOUT_MS = 60_000L;
+
     private final RealtimeSessionRegistry sessionRegistry;
     private final AccountService accountService;
     private final SocialService socialService;
@@ -36,8 +42,21 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         this.objectMapper = objectMapper;
     }
 
+    @EventListener(ApplicationReadyEvent.class)
+    public void resetPresenceOnStartup() {
+        accountService.markAllOffline();
+    }
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        // The app pings every 20s. A socket that goes silent (network lost, process killed
+        // without a close frame) is dropped after a minute, so the user doesn't stay "online".
+        if (session instanceof NativeWebSocketSession nativeSession) {
+            jakarta.websocket.Session standard = nativeSession.getNativeSession(jakarta.websocket.Session.class);
+            if (standard != null) {
+                standard.setMaxIdleTimeout(IDLE_TIMEOUT_MS);
+            }
+        }
         String userId = (String) session.getAttributes().get("userId");
         boolean firstSession = sessionRegistry.register(userId, session);
         if (firstSession && accountService.setOnline(userId, true)) {

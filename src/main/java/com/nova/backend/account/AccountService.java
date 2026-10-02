@@ -226,6 +226,23 @@ public class AccountService {
         return true;
     }
 
+    /**
+     * Presence is persisted with the account, so after a restart nobody can still be connected.
+     * Called once on startup to clear "online" flags left over from the previous run.
+     */
+    public synchronized int markAllOffline() {
+        int changed = 0;
+        for (AccountRecord account : new ArrayList<>(accounts.values())) {
+            if (account.online()) {
+                AccountRecord updated = account.withOnline(false);
+                accounts.put(updated.userId(), updated);
+                persistAccount(updated);
+                changed++;
+            }
+        }
+        return changed;
+    }
+
     public PublicUserCard getPublicProfile(String userId) {
         return toPublicCard(resolveAccountByKey(userId), null);
     }
