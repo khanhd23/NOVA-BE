@@ -601,7 +601,10 @@ public class SocialService {
                 null,
                 null,
                 summary,
-                MessageStatus.SEEN,
+                // A call log is a normal incoming message for the other participant.
+                // It must not be marked as read when the call ends; it becomes SEEN
+                // only when the recipient opens the thread and markThreadRead runs.
+                MessageStatus.SENT,
                 timeLabel(endedAt)
         );
         thread.messages().add(callLog);
