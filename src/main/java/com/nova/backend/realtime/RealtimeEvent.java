@@ -41,6 +41,13 @@ public record RealtimeEvent(
             data.put("messageId", messageId);
         }
         data.put("timestamp", timestamp.toString());
+        // FCM data messages carry no notification block, so title/body must travel as data.
+        if (title != null) {
+            data.put("title", title);
+        }
+        if (body != null) {
+            data.put("body", body);
+        }
         if (payload != null) {
             payload.forEach((key, value) -> data.put(key, value == null ? "" : String.valueOf(value)));
         }
